@@ -1,0 +1,741 @@
+---
+title: "Regression"
+author: "Ulrich Nguepkap Katchuang"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+    use_bookdown: true
+    lightbox: true
+    gallery: true
+    code_folding: hide
+    train_print: paged
+    theme: flatly
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+params:
+  region: France
+  year: 2025
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r, include=FALSE, echo=FALSE}
+# Charger les packages
+library(dplyr)
+library(ggplot2)
+
+# Installation des librairies nécessaires
+
+library(lubridate) # pour manipuler les dates
+library(cowplot)
+# Charger les bibliothèques nécessaires
+library(ggcorrplot)
+# Création d'histogrammes et de boxplots pour les variables numériques
+library(gridExtra)
+
+
+# Pour les graphiques
+library(gridExtra) # organiser et agencer plusieurs graphiques 
+library(tidyr) # remodeler ou restructurer les données
+library(plotly) # créer des graphiques interactifs
+library(gmodels) # créer des graphiques spécifiques à la modélisation statistique
+
+# Pour les tableaux
+library(knitr)
+library(kableExtra) # créer des tableaux 
+
+# Pour les corrélations 
+library(corrplot) # visualiser la matrice de corrélations
+
+# Pour les modèles
+library(glm2) # créer des modèles linéaires généralisés
+library(caret) # ajuster des modèles et évaluer les performances
+library(broom) # convertir les résultats de modèles statistiques en cadres de données "tidy"
+library(randomForest) # créer des modèles Random Forest
+library(shiny)
+
+# 1. Charger les bibliothèques nécessaires
+library(dplyr)
+library(sf)        # Pour manipuler les fichiers géographiques
+library(ggplot2)   # Pour tracer la carte
+library(ggthemes)  # Pour améliorer le style de la carte
+
+
+
+```
+
+```{r, include=FALSE, echo=FALSE}
+classifier_variables_tab <- function(data_set) {
+  # Initialisation des listes
+  variables_na <- c()
+  variables_numeriques <- c()
+  variables_binaires <- c()
+  variables_categorielles <- c()
+  
+  # Parcourir les colonnes du dataset
+  for (colu in colnames(data_set)) {
+    # Vérifier si la colonne contient des valeurs NA
+    if (any(is.na(data_set[[colu]]))) {
+      variables_na <- c(variables_na, colu)
+    }
+    
+    # Vérifier si la colonne est numérique
+    if (is.numeric(data_set[[colu]])) {
+      # Vérifier si la colonne est binaire (deux valeurs uniques)
+      if (length(unique(data_set[[colu]])) == 2) {
+        variables_binaires <- c(variables_binaires, colu)
+      } else {
+        variables_numeriques <- c(variables_numeriques, colu)
+      }
+    } else {
+      # Gérer les colonnes non numériques
+      if (length(unique(data_set[[colu]])) == 2) {
+        variables_binaires <- c(variables_binaires, colu)
+      } else {
+        variables_categorielles <- c(variables_categorielles, colu)
+      }
+    }
+  }
+  
+  # Création du résultat sous forme de liste
+  resultat <- list(
+    variables_na = variables_na,
+    variables_numeriques = variables_numeriques,
+    variables_binaires = variables_binaires,
+    variables_categorielles = variables_categorielles
+  )
+  
+  return(resultat)
+}
+
+
+
+classifier_variables <- function(data_set) {
+  # Initialisation des listes
+  variables_na <- c()
+  variables_numeriques <- c()
+  variables_binaires <- c()
+  variables_categorielles <- c()
+  
+  # Parcourir les colonnes du jeu de données
+  for (colu in colnames(data_set)) {
+    # Vérifier si la colonne contient des valeurs NA
+    if (any(is.na(data_set[[colu]]))) {
+      variables_na <- c(variables_na, colu)
+    }
+    
+    # Vérifier si la colonne est numérique
+    if (is.numeric(data_set[[colu]])) {
+      # Vérifier si la colonne est binaire (deux valeurs uniques)
+      if (length(unique(data_set[[colu]])) == 2) {
+        variables_binaires <- c(variables_binaires, colu)
+      } else {
+        variables_numeriques <- c(variables_numeriques, colu)
+      }
+    } else {
+      # Gérer les colonnes non numériques
+      if (length(unique(data_set[[colu]])) == 2) {
+        variables_binaires <- c(variables_binaires, colu)
+      } else {
+        variables_categorielles <- c(variables_categorielles, colu)
+      }
+    }
+  }
+  
+  # Création du tableau final
+  variables <- data.frame(
+    Type = c("Variables NA", "Variables Numériques", "Variables Binaires", "Variables Catégorielles"),
+    Colonnes = c(
+      paste(variables_na, collapse = ", "),
+      paste(variables_numeriques, collapse = ", "),
+      paste(variables_binaires, collapse = ", "),
+      paste(variables_categorielles, collapse = ", ")
+    )
+  )
+  
+}
+
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  tidy=TRUE
+)
+
+```
+
+# Introduction
+
+On commence par importer le jeu de données:
+
+```{r}
+#importation des données
+train<-read.csv('train_set.csv', header = T, sep = ",",dec=".")
+test<-read.csv('test_set.csv', header = T, sep = ",",dec=".")
+
+#appercu des données
+rmarkdown::paged_table(train)
+
+
+```
+
+On effectue un petit pré-traitement des données en vérifiants si elle contient des valeurs manquantes,
+
+```{r}
+#vérification valeurs manquantes
+sum(is.na(train))
+```
+
+ce qui n'est pas le cas.
+On peut donc continuer avec l'analyse des données en vérifiant le type des variables:
+
+On va transformer bonus_malus en binaire
+
+```{r}
+train$Bonus_Malus <- ifelse(train$Bonus_Malus < 100, 1, 0)
+test$Bonus_Malus <- ifelse(test$Bonus_Malus < 100, 1, 0)
+```
+
+Puis
+
+```{r, eval=FALSE, echo=FALSE}
+variables <- classifier_variables_tab(train)
+numeric_variables <- data.frame("variables_numériques"=variables$variables_numeriques)
+categorical_variables <- data.frame("variables_catégorielles"=append(variables$variables_categorielles,variables$variables_binaires))
+
+#categorical_variables %>%
+          kable(categorical_variables) %>% 
+          kable_styling(
+              bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+              full_width = FALSE,
+                )
+
+#numeric_variables %>%
+  kable(numeric_variables) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE,
+  )
+
+```
+
+On va convertir les variables catégorielles en facteur on Obtient alors:
+
+```{r}
+variables <- classifier_variables_tab(train)
+numeric_variables <- variables$variables_numeriques
+categorical_variables <- append(variables$variables_categorielles, variables$variables_binaires)
+#convertir les varianles catégorielles en factor
+train[categorical_variables] <- lapply(train[categorical_variables], factor)
+test[categorical_variables] <- lapply(test[categorical_variables], factor)
+str(train)
+```
+
+On remarque que la variable French_region qui représente les régions de france correpond aux anciennes régions de 2015 on va d'abord formater les noms pour qu'elles correspondent aux nouvelles régions de 2025
+
+Ici on garde les anciennes regions:
+
+```{r}
+
+# Créer le vecteur de correspondance
+region_mapping <-c(
+    "Ile-de-France" = "Île-de-France",
+    "Champagne-Ardenne" = "Champagne-Ardenne",
+    "Picardie" = "Picardie",
+    "Haute-Normandie" = "Haute-Normandie",
+    "Centre" = "Centre",
+    "Basse-Normandie" = "Basse-Normandie",
+    "Bourgogne" = "Bourgogne",
+    "Nord-Pas-de-Calais" = "Nord-Pas-de-Calais",
+    "Lorraine" = "Lorraine",
+    "Alsace" = "Alsace",
+    "Franche-Comte" = "Franche-Comté",
+    "Pays-de-la-Loire" = "Pays de la Loire",
+    "Bretagne" = "Bretagne",
+    "Poitou-Charentes" = "Poitou-Charentes",
+    "Aquitaine" = "Aquitaine",
+    "Midi-Pyrenees" = "Midi-Pyrénées",
+    "Limousin" = "Limousin",
+    "Rhone-Alpes" = "Rhône-Alpes",
+    "Auvergne" = "Auvergne",
+    "Languedoc-Roussillon" = "Languedoc-Roussillon",
+    "Provence-Alpes-Cotes-D'Azur" = "Provence-Alpes-Côte d'Azur",
+    "Corse" = "Corse"
+  )
+
+# Appliquer la correspondance aux noms de régions dans le jeu de données
+train_old <- train %>%
+  mutate(French_region = recode(French_region, !!!region_mapping))
+
+
+# 4. Préparer les données pour la carte
+# Calculer le nombre total de Claim par région
+old_claim_region <- train_old %>%
+  group_by(French_region) %>%
+  summarise(Total_Claim = sum(Claim))
+
+old_france_map <- st_read("regions-avant-redecoupage-2015.geojson")
+
+
+# 5. Joindre la carte avec les données
+
+old_france_map <- old_france_map %>%
+  left_join(old_claim_region, by = c("nom" = "French_region"))
+
+
+# 6. Tracer la carte
+centroides <- old_france_map %>%
+  st_centroid() %>%
+  mutate(long = st_coordinates(.)[, 1],
+         lat = st_coordinates(.)[, 2])
+
+
+ggplot(old_france_map) +
+  geom_sf(aes(fill = Total_Claim), color = "white") +
+  scale_fill_viridis_c(option = "C", na.value = "grey90") +
+  geom_text(data = centroides,
+            aes(x = long, y = lat, label = nom),
+            color = "black", size = 2, fontface = "bold") +
+  theme_minimal() +
+  labs(
+    title = "Répartition des sinistres (Claim) par région en France",
+    fill = "Total Claim"
+  )
+print(sum(train_old$Claim))
+#print(1-sum(train_old$Claim)/dim(train_old))
+```
+
+On divise notre dataset à présent entre variable cible et variables explicatives.
+
+```{r}
+#tableau de variables explicatives
+features <- train %>% select(-Claim)
+target <- train$Claim
+```
+
+### Distribution de la variable cible
+
+On s'intéresse maintenant à la distrubution de notre variable cible.
+
+```{r}
+#train$Claim<-as.factor(train$Claim)
+
+# Distribution de la variable cible
+
+ggplot(train, aes(x = Claim)) + geom_histogram(binwidth = 1, fill = "skyblue", color = "black") +
+    labs(title = "Distribution de la variable Claim", x = "Nombre de sinistres",
+        y = "Fréquence")
+
+#target_summary<-summary(train$Claim)
+```
+
+Pourcentage de chaque factor de la variable cible
+
+```{r}
+library(ggplot2)
+
+# Étape 1 : Calculer la fréquence de chaque valeur unique de 'Claim'
+frequences <- table(train$Claim)
+
+# Étape 2 : Convertir les fréquences en pourcentages
+pourcentages <- prop.table(frequences) * 100
+
+# Étape 3 : Créer un dataframe pour ggplot
+data_plot <- data.frame(
+  Classe = names(frequences),
+  Pourcentage = as.numeric(pourcentages)
+)
+
+# Étape 4 : Ajouter les pourcentages aux labels des classes
+data_plot$Classe <- paste0(data_plot$Classe, " (", round(data_plot$Pourcentage, 5), "%)")
+
+# Étape 5 : Créer le diagramme en camembert
+ggplot(data_plot, aes(x = "", y = Pourcentage, fill = Classe)) +
+  geom_bar(stat = "identity", width = 1) + # Créer des barres empilées
+  coord_polar(theta = "y") + # Transformer en camembert
+  labs(title = "Répartition des Claims en pourcentages") + # Titre
+  theme_void() + # Supprimer les axes pour un style camembert
+  theme(legend.position = "right") # Afficher la légende à droite
+
+
+```
+
+### Étude descriptive des variables explicatives numériques
+
+On va maintenant observer la distribution des variables explicatives numériques
+
+```{r}
+numeric_variables<-setdiff(numeric_variables,"Claim")
+hist_plots <- list()
+box_plots <- list()
+
+for (col in numeric_variables) {
+  hist <- ggplot(features, aes_string(x = col)) +
+  geom_histogram( fill = "green", color = "black") +
+    labs(title = paste("", col), x = col, y = "Fréquence") +
+    theme_minimal()
+  hist_plots[[col]] <- hist
+  
+  box <- ggplot(features, aes_string(y = col)) +
+    geom_boxplot(linewidth = 0.3) +
+    labs(title = paste("", col)) +
+    theme_bw()
+  box_plots[[col]] <- box
+}
+
+n <- length(hist_plots)
+
+
+```
+
+```{r }
+# Organisation des graphiques dans une grille 4x2
+i=1
+  grid.arrange(
+    grobs = c(hist_plots[i:min(i+1, n)], box_plots[i:min(i+1, n)]),
+    ncol = 2,
+  )
+  
+  plot_hist<-function(i){
+    if(i>n/2){
+      return("i trop grand")
+    }
+    grid.arrange(
+      grobs = c(hist_plots[i:min(i+1, n)], box_plots[i:min(i+1, n)]),
+      ncol = 2,
+    )
+  }
+  
+  plot_hist<-function(i){
+    if(i>n){
+      return("i trop grand")
+    }
+    grid.arrange(
+      grobs = c(hist_plots[i:min(i, n)], box_plots[i:min(i, n)]),
+      ncol = 2,
+    )
+  }
+```
+
+```{r}
+
+for (i in 1:n) {
+  plot_hist(i)
+}
+```
+
+```{r}
+ggplot(data = train, aes(x = Bonus_Malus, y = Claim)) +
+  geom_boxplot(fill = "steelblue") +
+  labs(title = paste("Distribution de Claim par Bonus_Malus"),
+       x = "Bonus_Malus",
+       y = "Claim")
+```
+
+```{r}
+box_plot<-function(col){
+  p1<-ggplot(train, aes(x = Claim, y = .data[[col]], fill=as.factor(Claim))) +
+    geom_boxplot() +
+    labs(title = paste("Distribution de" ,col, " par Claim"),
+         x = "Claim",
+         y = col)
+  
+  # Histogram with 20 bins
+  # Histogram
+  p2 <- ggplot(train, aes(
+    x = .data[[col]],
+    fill = as.factor(Claim)
+  )) +
+    geom_histogram(color = "black", bins = 10, alpha = 0.7) +
+    labs(
+      title = paste("Histogramme de", col, "par Claim"),
+      x = col,
+      y = "Nombre"
+    ) +
+    theme_bw()
+  
+  return(p2)
+}
+
+hist_plot<-function(col){
+ # calculate the number of participants in each class
+df <- train %>%
+  group_by(Claim) %>%
+  count(.data[[col]]) 
+
+p1<-ggplot(df, aes(x = n, y = reorder(.data[[col]], n), fill = Claim)) + 
+  geom_bar(stat = "identity", color = "black",  width = 0.7) +
+  scale_fill_brewer(palette = "Set2")+
+  theme(legend.position = "bottom") +
+    labs(title = paste("Répartition de claim par" ,col),
+         x = "nombre d'observations",
+         y = col)
+
+
+
+
+p2<-ggplot(train, aes(x = .data[[col]], fill = as.factor(Claim))) +
+  geom_bar(position = "dodge") +
+  coord_flip() +
+  labs(title = paste("Répartition des sinistres par" ,col ), x =col, y = "Nombre de polices") +
+  scale_fill_brewer(palette = "Set2", name = "Nombre de sinistres")
+
+  return(p2)
+}
+
+
+
+for (col in numeric_variables) {
+  print(box_plot(col))
+}
+
+for (col in categorical_variables) {
+  print(hist_plot(col))
+}
+
+```
+
+# Premier modèle
+
+on effectue un premier modèle:
+
+```{r}
+train_1<-train %>% select(-PolID)
+#train_1$Claim<-as.numeric(train_1$Claim)
+train_1$Claim<-as.numeric(train_1$Claim)
+head(train_1$Claim)
+# Standardiser toutes les colonnes numériques
+
+train_1<-train_1 %>% select(-Claim)
+# Identifier les colonnes numériques
+numeric_cols <- sapply(train_1, is.numeric)
+
+# Standardiser les colonnes numériques
+train_1[numeric_cols] <- scale(train_1[numeric_cols])
+
+train_1$Claim<-train$Claim
+
+# Vérification des résultats
+head(train_1)
+
+```
+
+```{r}
+
+# Créer un modèle de régression linéaire
+poisson_model <- glm(Claim ~ ., family = poisson(link = "log"), data = train_1)
+summary(poisson_model)
+
+
+```
+
+. Interprétation générale Le modèle cherche à expliquer le nombre de sinistres (Claim) en fonction des variables explicatives.
+Les coefficients représentent les effets logarithmiques des variables explicatives sur l'espérance du nombre de sinistres.
+
+2.  Résumé des résultats Deviance résiduelle : 132724, comparée à une deviance nulle de 140439, indique que le modèle explique une partie importante de la variabilité des données, bien qu'une proportion reste non expliquée. AIC (Akaike Information Criterion) : 173410, qui peut être utilisé pour comparer ce modèle à d'autres modèles (un AIC plus bas est préférable).
+3.  Variables significatives Les variables avec une valeur p \< 0.05 sont considérées comme statistiquement significatives. Voici les principales :
+
+Très significatives (p \< 0.001) :
+
+Period_Exp: Impact positif important.
+Car_Power: Augmentation modérée des sinistres.
+Car_Age et Age: Effet négatif sur le nombre de sinistres.
+Bonus_Malus1: Impact fortement négatif.
+Plusieurs classes de Urban_rural_class montrent une augmentation significative.
+Car_ModelB12: Effet négatif notable.
+Car_FuelRegular: Réduction significative des sinistres.
+Modérément significatives (p \< 0.05) :
+
+Car_ModelB5: Effet positif.
+French_regionLimousin: Effet positif.
+French_regionMidi-Pyrenees: Effet négatif.
+Variables non significatives :
+
+La plupart des catégories de Car_Model et French_region ont des p-valeurs élevées (\> 0.05), ce qui suggère qu'elles n'ont pas d'effet significatif sur le nombre de sinistres.
+4.
+Points d'attention Variables non significatives :
+
+Certaines variables, comme Car_Model ou French_region, pourraient être supprimées ou regroupées pour simplifier le modèle sans perte d'information.
+Surdispersion :
+
+Si la variance des données dépasse la moyenne, le modèle de Poisson pourrait ne pas être adéquat.
+Vérifiez la présence de surdispersion (rapport de la deviance résiduelle au degré de liberté \> 1).
+Si surdispersion présente, envisagez un modèle binomial négatif.
+Interactions :
+
+Testez si des interactions entre les variables (e.g., Period_Exp et Bonus_Malus1) améliorent la précision du modèle.
+5.
+Recommandations Validation du modèle : Effectuez des diagnostics sur les résidus pour vérifier l'ajustement du modèle.
+Modèles alternatifs : Si surdispersion détectée, utilisez un modèle binomial négatif.
+Simplicité : Envisagez de supprimer les variables non significatives ou de regrouper les modalités de variables catégoriques (e.g., Car_Model, French_region).
+Interactions : Testez des modèles incluant des interactions pertinentes entre variables.
+
+Pour ton fichier `train_set.csv`, voici quelques visualisations pertinentes pour explorer les données et leur structure.
+Ces visualisations utilisent des bibliothèques comme `ggplot2` pour produire des graphiques clairs et interprétables.
+
+------------------------------------------------------------------------
+
+Un second modele avec un lasso :
+
+```{r}
+# Charger le package
+library(glmnet)
+
+# Convertir les données en matrice pour glmnet
+x <- model.matrix(Claim ~ . - 1, data = train_1)  # Variables explicatives
+y <- train_1$Claim  # Variable cible
+
+# Ajuster un modèle Lasso
+lasso_model <- glmnet(x, y, family = "poisson", alpha = 1)  # alpha = 1 pour Lasso
+
+# Visualiser le chemin des coefficients
+plot(lasso_model, xvar = "lambda", label = TRUE)
+
+# Validation croisée pour choisir le meilleur lambda
+cv_lasso <- cv.glmnet(x, y, family = "poisson", alpha = 1)
+
+# Lambda optimal
+best_lambda <- cv_lasso$lambda.min
+cat("Lambda optimal :", best_lambda, "\n")
+
+# Recalculer le modèle avec le meilleur lambda
+final_lasso <- glmnet(x, y, family = "poisson", alpha = 1, lambda = best_lambda)
+
+# Obtenir les coefficients sélectionnés
+selected_coefficients <- coef(final_lasso)
+print(selected_coefficients)
+
+```
+
+
+### PCA 
+
+```{r}
+#install.packages("FactoMineR")
+# Analyse en composantes principales (PCA)
+library(FactoMineR)
+numeric_variables <- names(train_1)[sapply(train_1, is.numeric)]
+
+# Vérification des colonnes sélectionnées
+print(numeric_variables)
+
+# Réalisation de l'ACP
+library(FactoMineR)
+res_pca <- PCA(train_1[numeric_variables], graph = FALSE)
+ #{érification de la structure des résultats
+summary(res_pca)
+```
+
+
+
+```{r}
+
+# Visualisation avec coloration par la variable "Claim"
+library(factoextra)
+train_1$Claim <- as.factor(train_1$Claim)  # Assurez-vous que Claim est un facteur
+fviz_pca_ind(res_pca, habillage = "Claim", repel = TRUE, addEllipses = TRUE, 
+             ellipse.level = 0.95, pointsize = 2)
+
+
+```
+
+### **2. Distribution de l’âge des conducteurs**
+
+Un histogramme pour voir la répartition des âges.
+
+```{r}
+ggplot(train, aes(x = Age)) +
+  geom_histogram(binwidth = 5, fill = "green", color = "black") +
+  labs(title = "Répartition de l'âge des conducteurs", x = "Âge", y = "Fréquence")
+```
+
+------------------------------------------------------------------------
+
+### **3. Relation entre `Car_Power` et `Claim`**
+
+Un boxplot pour comprendre comment la puissance de la voiture influence le nombre de sinistres.
+
+```{r}
+ggplot(train, aes(x = as.factor(Car_Power), y = Claim)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(title = "Relation entre la puissance de la voiture et les sinistres", x = "Puissance de la voiture", y = "Nombre de sinistres")
+```
+
+------------------------------------------------------------------------
+
+### **4. Répartition des sinistres par type de carburant (`Car_Fuel`)**
+
+Un graphique en barres pour analyser comment le carburant influence le nombre de sinistres.
+
+```{r}
+ggplot(train, aes(x = Car_Fuel, fill = as.factor(Claim))) +
+  geom_bar(position = "dodge") +
+  labs(title = "Répartition des sinistres par type de carburant", x = "Type de carburant", y = "Nombre de polices") +
+  scale_fill_brewer(palette = "Set3", name = "Nombre de sinistres")
+```
+
+------------------------------------------------------------------------
+
+### **5. Répartition des sinistres par région**
+
+Un graphique en barres pour visualiser les différences régionales.
+
+```{r}
+ggplot(train, aes(x = French_region, fill = as.factor(Claim))) +
+  geom_bar(position = "dodge") +
+  coord_flip() +
+  labs(title = "Répartition des sinistres par région", x = "Région", y = "Nombre de polices") +
+  scale_fill_brewer(palette = "Set2", name = "Nombre de sinistres")
+```
+
+------------------------------------------------------------------------
+
+### **6. Relation entre la densité de population et les sinistres**
+
+Un graphique en points pour explorer la corrélation entre la densité d'habitants et le nombre de sinistres.
+
+```{r}
+ggplot(train, aes(x = Inhab_density, y = Claim)) +
+  geom_point(alpha = 0.3, color = "purple") +
+  geom_smooth(method = "lm", color = "red", se = FALSE) +
+  labs(title = "Relation entre densité d'habitants et sinistres", x = "Densité de population", y = "Nombre de sinistres")
+```
+
+------------------------------------------------------------------------
+
+### **7. Corrélation entre variables numériques**
+
+Une heatmap pour visualiser les corrélations entre les variables numériques.
+
+```{r}
+library(reshape2)
+cor_matrix <- cor(train[, c("Claim", "Period_Exp", "Car_Power", "Car_Age", "Age", "Inhab_density")])
+melted_cor <- melt(cor_matrix)
+ggplot(data = melted_cor, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "red", high = "blue", mid = "white", midpoint = 0) +
+  labs(title = "Heatmap des corrélations", x = "", y = "")
+
+
+# Distribution des variables numériques
+num_vars <- train[, c("Claim", "Period_Exp", "Car_Power", "Car_Age", "Age", "Inhab_density")]
+corr_matrix <- cor(num_vars)
+corrplot(corr_matrix, method = "circle")
+
+
+# Relation entre Age et Claim
+train %>% 
+  ggplot(aes(x = Age, y = Claim)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "Relation entre Age et Claim", x = "Age", y = "Claim")
+
+
+print(max(train$Age))
+
+```
