@@ -21,7 +21,8 @@ editor_options:
   markdown: 
     wrap: sentence
 ---
-Commentaire
+Commentaire 
+essai: 
 ```{r, include=FALSE, echo=FALSE}
 # Charger les packages
 library(dplyr)
