@@ -21,6 +21,7 @@ editor_options:
   markdown: 
     wrap: sentence
 ---
+hh
 Commentaire 
 essai: 
 1234
@@ -67,8 +68,6 @@ library(dplyr)
 library(sf)        # Pour manipuler les fichiers géographiques
 library(ggplot2)   # Pour tracer la carte
 library(ggthemes)  # Pour améliorer le style de la carte
-
-
 
 ```
 
@@ -172,7 +171,6 @@ knitr::opts_chunk$set(
   message = FALSE,
   tidy=TRUE
 )
-
 ```
 
 # Introduction
