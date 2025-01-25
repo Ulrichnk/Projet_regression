@@ -82,16 +82,13 @@ categorical_variables <- data.frame("variables_catégorielles"=append(variables$
           kable(categorical_variables) %>% 
           kable_styling(
               bootstrap_options = c("striped", "hover", "condensed", "responsive"),
-              full_width = FALSE,
-                )
+              full_width = FALSE)
 
 #numeric_variables %>%
   kable(numeric_variables) %>%
   kable_styling(
     bootstrap_options = c("striped", "hover", "condensed", "responsive"),
-    full_width = FALSE
-    
-  )
+    full_width = FALSE )
   
   
 #On va convertir les variables catégorielles en facteur on Obtient alors:
@@ -181,8 +178,15 @@ plot_numeric<-function(data,variable){
     labs(title = paste("Boxplot de la variable",variable)) +
     theme_bw()
   
+  p3<-ggplot(train, aes(x = .data[[variable]], y = Claim)) +
+  geom_point(alpha = 0.6, color = "darkorange") +
+  labs(title = paste("Relation entre",variable,"et nombre de sinistres"),
+       x = variable, y = "Nombre de sinistres") +
+  theme_minimal()
+  
   print(p1)
   print(p2)
+  print(p3)
 }
 
 box_plot<-function(data, col){
@@ -213,17 +217,13 @@ box_plot<-function(data, col){
 }
 
 
-#plot_numeric(train,"Inhab_density")
+plot_numeric(train,"Inhab_density")
 box_plot(train,"Inhab_density")
 print(sum(train$Inhab_density < 1))
 
 
 
-ggplot(train, aes(x = Inhab_density, y = Claim)) +
-  geom_point(alpha = 0.6, color = "darkorange") +
-  labs(title = "Relation entre densité de population et nombre de sinistres",
-       x = "Densité (habitants/km²)", y = "Nombre de sinistres") +
-  theme_minimal()
+
 
 ```
 ### Age
@@ -231,6 +231,62 @@ ggplot(train, aes(x = Inhab_density, y = Claim)) +
 ```{r}
 plot_numeric(train,"Age")
 print(sum(train$Age > 80))
+
+
+```
+###  Car_Age
+
+```{r}
+plot_numeric(train,"Car_Age")
+```
+
+
+
+
+### Car_Power
+```{r}
+plot_numeric(train,"Car_Power")
+```
+
+
+### Period_Exp
+
+```{r}
+plot_numeric(train,"Period_Exp")
+```
+
+
+## Analyse de la target
+
+```{r}
+source("functions.R")
+plot_percentage(train,"Claim",5)
+```
+## Analyse des corrélations
+
+Une heatmap pour visualiser les corrélations entre les variables numériques.
+
+```{r}
+library(reshape2)
+library(corrplot)
+
+# Distribution des variables numériques
+num_vars <- train[, c("Claim", "Period_Exp", "Car_Power", "Car_Age", "Age", "Inhab_density")]
+
+
+corr_matrix <- cor(num_vars)
+melted_cor <- melt(corr_matrix)
+ggplot(data = melted_cor, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "red", high = "blue", mid = "white", midpoint = 0) +
+  labs(title = "Heatmap des corrélations", x = "", y = "")
+
+
+
+
+corrplot(corr_matrix, method = "circle")
+
+
 
 
 ```

@@ -29,7 +29,7 @@ plot_hist_by_claim<-function(data, col){
   
 }
 
-plot_percentage <- function(data, col) {
+plot_percentage <- function(data, col,precision=1) {
   library(ggplot2)
   library(dplyr)
   
@@ -45,7 +45,7 @@ plot_percentage <- function(data, col) {
       width = 0.7    ) +
     geom_text(
       aes(
-        label = paste0(round(percentage, 1), "%"), 
+        label = paste0(round(percentage, precision), "%"), 
         color = as.factor(.data[[col]])  # Couleur des étiquettes dépendante de la colonne
       ), 
       vjust =- 0.2, 
@@ -143,7 +143,6 @@ plot_claims_by_region <- function(train_data, geojson_file) {
 
 plot_categorical <- function(data, col) {
   library(ggplot2)
-  print(col)
   ggplot(data, aes(x = as.factor(.data[[col]]), fill = as.factor(.data[[col]]))) +
     geom_bar() +
     labs(
