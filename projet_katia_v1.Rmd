@@ -83,12 +83,13 @@ knitr::opts_chunk$set(
 On commence par importer le jeu de données:
 
 ```{r}
+
 #importation des données
-train<-read.csv('train_set.csv', header = T, sep = ",",dec=".")
-test<-read.csv('test_set.csv', header = T, sep = ",",dec=".")
+train<-read.csv('./data/train_set.csv', header = T, sep = ",",dec=".")
+test<-read.csv('./data/test_set.csv', header = T, sep = ",",dec=".")
 
 #appercu des données
-rmarkdown::paged_table(train)
+rmarkdown::paged_table(test)
 
 
 ```
@@ -215,8 +216,6 @@ ggplot(old_france_map) +
     title = "Répartition des sinistres (Claim) par région en France",
     fill = "Total Claim"
   )
-print(sum(train_old$Claim))
-#print(1-sum(train_old$Claim)/dim(train_old))
 ```
 
 On divise notre dataset à présent entre variable cible et variables explicatives.
