@@ -1,5 +1,5 @@
 ---
-title: "Regression"
+title: "Regression exploration"
 author: "Ulrich Nguepkap Katchuang"
 date: "`r Sys.Date()`"
 output:
@@ -33,18 +33,23 @@ knitr::opts_chunk$set(
 ```
 
 
-```{r}
+```{r library, message=FALSE, warning=FALSE}
 source("functions.R")
 
 
 ```
+
+
+# Introduction
+
+## Nettoyage des données
 
 On commence par importer le jeu de données et on vérifie si il y'a des valeurs manquantes, ce qui n'est pas le cas.
 On peut donc continuer avec l'analyse des données en vérifiant le type des variables:
 
 On va transformer bonus_malus en binaire
 et retirer les variables qui ne sont pas utiles pour la prédiction comme PoliId.
-```{r}
+```{r data_display}
 library(rmarkdown)
 library(dplyr)
 
@@ -71,7 +76,7 @@ paged_table(train)
 
 On peut maintenant continuer avec l'analyse des données en vérifiant le type des variables:
 
-```{r}
+```{r typing_variables}
 library(kableExtra)
 
 variables <- classifier_variables_tab(train)
@@ -105,14 +110,14 @@ str(train)
 ```
 
 
-##Étude des variables catégorielles:
+## Étude des variables catégorielles:
 
 
 
 
 ### Car Model
 
-```{r}
+```{r car_model_graph}
 plot_categorical(train,"Car_Model")
 plot_percentage(train,"Car_Model")
 plot_hist_by_claim(train,"Car_Model")
@@ -120,7 +125,7 @@ plot_hist_by_claim(train,"Car_Model")
 
 ### Bonus_Malus
 
-```{r}
+```{r bonus_malus_graph}
 plot_categorical(train,"Bonus_Malus")
 plot_percentage(train,"Bonus_Malus")
 plot_hist_by_claim(train,"Bonus_Malus")
@@ -129,7 +134,7 @@ plot_hist_by_claim(train,"Bonus_Malus")
 
 ### Urban_rural_class
 
-```{r}
+```{r urban_rural_class_graph}
 plot_categorical(train,"Urban_rural_class")
 plot_percentage(train,"Urban_rural_class")
 plot_hist_by_claim(train,"Urban_rural_class")
@@ -137,7 +142,7 @@ plot_hist_by_claim(train,"Urban_rural_class")
 
 ### Car_Fuel
 
-```{r}
+```{r car_fuel_graph}
 plot_categorical(train,"Car_Fuel")
 plot_percentage(train,"Car_Fuel")
 plot_hist_by_claim(train,"Car_Fuel")
@@ -151,7 +156,7 @@ mosaic(~ Car_Fuel + Bonus_Malus , data = train, shade = TRUE)
 
 ### French_region
 
-```{r,warning=FALSE}
+```{r French_region_graph,warning=FALSE}
 source("functions.R")
 plot_categorical(train,"French_region")
 plot_percentage(train,"French_region")
@@ -166,7 +171,7 @@ plot_claims_by_region(train, "./data/regions-avant-redecoupage-2015.geojson")
 
 ### Inhab_density
 
-```{r}
+```{r Inhab_density_graph}
 plot_numeric<-function(data,variable){
   p1<-ggplot(data, aes_string(x=variable)) +
     geom_histogram(aes(y=..density..), bins = 30, fill = "lightblue", color = "black") +
@@ -228,7 +233,7 @@ print(sum(train$Inhab_density < 1))
 ```
 ### Age
 
-```{r}
+```{r Age_graph}
 plot_numeric(train,"Age")
 print(sum(train$Age > 80))
 
@@ -236,7 +241,7 @@ print(sum(train$Age > 80))
 ```
 ###  Car_Age
 
-```{r}
+```{r Car_Age_graph}
 plot_numeric(train,"Car_Age")
 ```
 
@@ -244,21 +249,21 @@ plot_numeric(train,"Car_Age")
 
 
 ### Car_Power
-```{r}
+```{r Car_Power_graph}
 plot_numeric(train,"Car_Power")
 ```
 
 
 ### Period_Exp
 
-```{r}
+```{r Period_Exp_graph}
 plot_numeric(train,"Period_Exp")
 ```
 
 
 ## Analyse de la target
 
-```{r}
+```{r target_analysis}
 source("functions.R")
 plot_percentage(train,"Claim",5)
 ```
@@ -266,7 +271,7 @@ plot_percentage(train,"Claim",5)
 
 Une heatmap pour visualiser les corrélations entre les variables numériques.
 
-```{r}
+```{r correlation_analysis}
 library(reshape2)
 library(corrplot)
 
@@ -290,5 +295,11 @@ corrplot(corr_matrix, method = "circle")
 
 
 ```
+```{r data_save, eval=FALSE}
+# Sauvegarder l'ensemble d'entraînement
+write.csv(train, "./data/train_set_clean.csv", row.names = FALSE)
 
+# Sauvegarder l'ensemble de test
+write.csv(test,"./data/test_set_clean.csv", row.names = FALSE)
 
+```
