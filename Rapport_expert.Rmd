@@ -1,0 +1,84 @@
+---
+title: "Rapport expert: Prédiction du nombre de sinistres pour assurance responsabilité civile automobile"
+author: "Aya Berraho, Lijia Zhou, Ulrich Nguepkat Kaptchuang"
+date: "2025-01-01"
+institute: "Université Paris-Dauphine"
+departement: "Master 2 ISF"
+lang: fr
+output:
+  rmdformats::robobook:
+    highlight: kate
+    use_bookdown: true
+    css: style.css
+    lightbox : true
+    gallery: true
+    code_folding: none
+    message: FALSE
+    warnings: FALSE
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+## Global options
+knitr::opts_chunk$set(cache = FALSE, warning = FALSE, message = FALSE, fig.retina = 2)
+options(encoding = 'UTF-8')
+```
+
+```{r, include=FALSE, results = "hide", message = FALSE, warning = FALSE}
+library(ggplot2)
+library(dplyr)
+library(rmarkdown)
+library(kableExtra)
+library(corrplot)
+`````
+
+# Introduction 
+
+# Observation des données 
+
+## Importation des données 
+
+```{r}
+# Téléchargement du jeu de données 
+train<-read.csv('train_set.csv', header = T, sep = ",",dec=".")
+testX<-read.csv('test_set.csv', header = T, sep = ",",dec=".")
+set.seed(2025)
+
+# Affichage du jeu de données sous forme de tableau
+rmarkdown::paged_table(train)
+```
+```{r}
+variable_summary <- data.frame(
+  Variable = colnames(train),
+  Type = sapply(train, class),
+  Missing_Values = sapply(data, function(x) sum(is.na(x))))
+
+variable_summary %>%
+  kable(format = "html", caption = "Résumé des variables") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+```{r}
+summary(data)
+`````
+```{r}
+# Matrice de corrélation
+cor_matrix <- cor(numeric_vars, use = "complete.obs")
+
+# Affichage de la moitié supérieure uniquement
+corrplot(cor_matrix, method = "color", type = "upper", 
+         tl.col = "black", tl.cex = 0.8, addCoef.col = "black")
+```
+
+## Transformation des données 
+
+```{r}
+# Transformer les variables catégorielles en facteurs
+data$Car_Model <- as.factor(data$Car_Model)
+data$Car_Fuel <- as.factor(data$Car_Fuel)
+data$Urban_rural_class <- as.factor(data$Urban_rural_class)
+data$French_region <- as.factor(data$French_region)
+
+str(data)
+````
