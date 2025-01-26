@@ -1,6 +1,6 @@
 ---
-title: "Regression"
-author: "Ulrich Nguepkap Katchuang"
+title: "Projet Regression et Classification"
+author: "Aya Berraho, Lijia Zhou, Ulrich Nguepkat Kaptchuang"
 date: "`r Sys.Date()`"
 output:
   rmdformats::robobook:
@@ -172,8 +172,7 @@ knitr::opts_chunk$set(
 
 # Introduction
 
-On commence par importer le jeu de données:
-
+D'abord, on importe les données et on affiche un aperçu de celles-ci:
 ```{r}
 #importation des données
 train<-read.csv('train_set.csv', header = T, sep = ",",dec=".")
@@ -182,14 +181,78 @@ test<-read.csv('test_set.csv', header = T, sep = ",",dec=".")
 #appercu des données
 rmarkdown::paged_table(train)
 
-
 ```
 
-On effectue un petit pré-traitement des données en vérifiants si elle contient des valeurs manquantes,
+```{r}
+
+data <- data.frame(
+  Nom = c(
+    "PolID", "Claim", "Period_Exp", "Car_Power", "Car_Age", 
+    "Age", "Bonus_Malus", "Car_Model", "Car_Fuel", "Urban_rural_class", 
+    "Inhab_density", "French_region"
+  ),
+  Type = c(
+    "numérique", "entier", "numérique", "entier", "entier", 
+    "entier", "numérique", "catégorique", "catégorique", "catégorique", 
+    "numérique", "catégorique"
+  ),
+  Description = c(
+    "Identifiant unique de la police d’assurance",
+    "Nombre de sinistres pendant la période d’exposition",
+    "Période d’exposition d’une police, exprimée en années",
+    "Puissance de la voiture",
+    "Âge du véhicule, exprimé en années",
+    "Âge du conducteur, exprimé en années",
+    "Bonus/Malus, coefficient de risque",
+    "Modèle de la voiture",
+    "Type de carburant de la voiture",
+    "Classe d’habitat du conducteur",
+    "Densité d’habitants (habitants/km²)",
+    "Région de la police d’assurance en France"
+  ),
+  Support= c(
+    "Valeur numérique unique",
+    "Entre 0 et un maximum selon les données",
+    "Entre 0 et 1",
+    "Valeurs ordonnées (ex. 4, 5, 7...)",
+    "Entre 0 et plusieurs dizaines d’années",
+    "18 ans et plus",
+    "Entre 50 et 350",
+    "Modalités inconnues",
+    "Diesel, Essence",
+    "A (rural) à F (urbain)",
+    "Entre 0 et plusieurs milliers",
+    "Noms des régions françaises"
+  )
+)
+
+kable(
+  data,
+  caption = "Récapitulatif des données",
+  booktabs = TRUE
+)
+```
+
+Aussi on affiche la dimension de la base de données:
+```{r}
+dim <- data.frame(dim(train)) 
+rownames(dim) <- c("Nb de lignes","Nb de colonnes") 
+colnames(dim) <- c("") 
+
+dim %>% 
+  kbl(caption = "Dimension du données") %>%
+  kable_styling() 
+```
+
+On effectue ensuite un petit pré-traitement des données en vérifiants si elle contient des valeurs manquantes, le tableau ci-dessous affiche le nombre de valeur manquante par variable. D'après l'affichage ci-dessous, il n'y a donc pas de valeurs manquantes.
 
 ```{r}
-#vérification valeurs manquantes
-sum(is.na(train))
+val_manquantes <- sapply(df, function(x) sum(is.na(x)))
+val_manq <- data.frame(val_manquantes) 
+colnames(val_manq) <- c("Nb de valeur manquante") 
+val_manq %>% 
+  kbl(caption = "Nombre de valeur manquante par variable") %>% 
+  kable_styling() 
 ```
 
 ce qui n'est pas le cas.
