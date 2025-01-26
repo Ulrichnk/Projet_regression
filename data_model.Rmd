@@ -62,6 +62,9 @@ str(train)
 ```
 
 
+
+
+
 # Modélisation
 
 
@@ -110,7 +113,43 @@ train_standardized$Claim <- train_set$Claim
 print(paste("mean",mean(train_set$Claim)))
 print(paste("var",var(train_set$Claim)))
 ```
+## ACP
 
+```{r}
+# Chargement des packages nécessaires
+library(FactoMineR)  # Pour l'ACP
+library(explor)  # Pour la visualisation des résultats
+train_test <- train %>% select(-Claim)
+# 1. Filtrer les colonnes numériques uniquement (exclure la variable cible)
+data_for_acp <- train_test[, sapply(train_test, is.numeric)]
+
+# 2. Standardiser les données
+data_for_acp_scaled <- scale(data_for_acp)
+result <- PCA(data_for_acp_scaled, graph = FALSE)
+#afficher les résultats
+explor(result)
+```
+
+
+```{r}
+library(factoextra)
+# 3. Appliquer l'ACP
+acp_result <- prcomp(data_for_acp_scaled, center = TRUE, scale. = TRUE)
+
+# 4. Résumé des résultats
+summary(acp_result)
+
+# 5. Visualisation des résultats
+# Visualisation de la variance expliquée
+fviz_eig(acp_result)
+
+# Visualisation des individus dans le plan des deux premières composantes
+fviz_pca_ind(acp_result, geom.ind = "point", col.ind = train$Claim, palette = "jco", addEllipses = TRUE, legend.title = "Target")
+
+# Visualisation des variables dans le plan des deux premières composantes
+fviz_pca_var(acp_result, col.var = "contrib", gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"))
+
+```
 
 ```{r}
 # Créer un modèle de régression linéaire
