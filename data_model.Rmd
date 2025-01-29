@@ -1,0 +1,218 @@
+---
+title: "Regression model"
+author: "Ulrich Nguepkap Katchuang"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+    use_bookdown: true
+    lightbox: true
+    gallery: true
+    code_folding: hide
+    train_print: paged
+    theme: flatly
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+params:
+  region: France
+  year: 2025
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  tidy=TRUE
+)
+
+source("functions.R")
+```
+
+
+```{r data_display}
+library(rmarkdown)
+library(dplyr)
+
+#importation des données
+train<-read.csv('./data/train_set_clean.csv', header = T, sep = ",",dec=".")
+test<-read.csv('./data/test_set_clean.csv', header = T, sep = ",",dec=".")
+
+
+variables <- classifier_variables_tab(train)
+numeric_variables <- variables$variables_numeriques
+categorical_variables <- append(variables$variables_categorielles, variables$variables_binaires)
+#convertir les varianles catégorielles en factor
+train[categorical_variables] <- lapply(train[categorical_variables], factor)
+test[categorical_variables] <- lapply(test[categorical_variables], factor)
+```
+
+
+on affiche
+```{r}
+# On vérifie
+head(train)
+head(test)
+str(train)
+```
+
+
+
+
+
+# Modélisation
+
+
+
+
+## Régression de poisson
+
+standardiser les variables numériques et créer un modèle de régression de poisson.
+```{r sampling}
+set.seed(123)  # Pour reproduire les résultats
+
+
+sampling<-function(data,target="Claim", p = 0.7) {
+    library(rsample) 
+    #Create a stratified split of the data, maintaining the proportion of classes
+    mydata_split <- initial_split(data, prop =p, strata = target)
+    #mydata_split <- initial_split(mydata, prop = .7)
+    train <- training(mydata_split)
+    test  <- testing(mydata_split)
+    return(list(train = train, test = test))
+}
+# Répartition (70% train, 30% test)
+splits <- sampling(train, target = "Claim", p = 0.7)
+
+# Accéder aux ensembles d'entraînement et de test
+train_set <- splits$train
+test_set <- splits$test
+
+standardize_data <- function(data,target) {
+  data <- data %>% select(-target)
+  # Standardiser uniquement les colonnes numériques
+  numeric_cols <- sapply(data, is.numeric)
+  
+  # Appliquer la standardisation
+  data_standardized <- data
+  data_standardized[, numeric_cols] <- scale(data[, numeric_cols])
+  
+  return(data_standardized)
+}
+# Standardiser uniquement les colonnes numériques
+train_standardized <- standardize_data(train_set, "Claim")
+# Afficher un aperçu des données standardisées
+head(train_standardized)
+train_standardized$Claim <- train_set$Claim
+
+print(paste("mean",mean(train_set$Claim)))
+print(paste("var",var(train_set$Claim)))
+```
+## ACP
+
+```{r}
+# Chargement des packages nécessaires
+library(FactoMineR)  # Pour l'ACP
+library(explor)  # Pour la visualisation des résultats
+train_test <- train %>% select(-Claim)
+# 1. Filtrer les colonnes numériques uniquement (exclure la variable cible)
+data_for_acp <- train_test[, sapply(train_test, is.numeric)]
+
+# 2. Standardiser les données
+data_for_acp_scaled <- scale(data_for_acp)
+result <- PCA(data_for_acp_scaled, graph = FALSE)
+#afficher les résultats
+explor(result)
+```
+
+
+```{r}
+library(factoextra)
+# 3. Appliquer l'ACP
+acp_result <- prcomp(data_for_acp_scaled, center = TRUE, scale. = TRUE)
+
+# 4. Résumé des résultats
+summary(acp_result)
+
+# 5. Visualisation des résultats
+# Visualisation de la variance expliquée
+fviz_eig(acp_result)
+
+# Visualisation des individus dans le plan des deux premières composantes
+fviz_pca_ind(acp_result, geom.ind = "point", col.ind = train$Claim, palette = "jco", addEllipses = TRUE, legend.title = "Target")
+
+# Visualisation des variables dans le plan des deux premières composantes
+fviz_pca_var(acp_result, col.var = "contrib", gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"))
+
+```
+
+```{r}
+# Créer un modèle de régression linéaire
+poisson_model <- glm(Claim ~ ., family = "poisson", data = train_standardized)
+#summary(poisson_model)
+```
+
+
+```{r}
+#poisson_model%>% summary()%>% coefficients%>%knitr::kable()
+
+summary(poisson_model)
+```
+```{r}
+library(ggplot2)
+coef_df <- as.data.frame(summary(poisson_model)$coefficients)
+coef_df$Variable <- rownames(coef_df)
+ggplot(coef_df, aes(x = reorder(Variable, Estimate), y = Estimate)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_bw() +
+  labs(title = "Impact des variables sur les sinistres", x = "Variable", y = "Coefficient")
+
+```
+
+```{r}
+library(AER)
+dispersiontest(poisson_model)
+
+```
+
+```{r}
+poisson_model_reduced <- glm(Claim ~ Period_Exp + Car_Power + Car_Age + Age + Bonus_Malus + Urban_rural_class, 
+                             family = "poisson", data = train_standardized)
+summary(poisson_model_reduced)
+
+```
+performance du modèle
+
+
+```{r}
+library(earth)
+
+mars_model <- earth(Claim ~ ., data = train_set)
+summary(mars_model)
+
+```
+
+```{r}
+predicted_claims <- predict(mars_model, newdata = test_set, type = "response")
+
+# Calculer l'erreur moyenne absolue
+mae <- mean(abs(predicted_claims - test_set$Claim))
+cat("Mean Absolute Error (MAE):", mae, "\n")
+```
+```{r}
+library(dplyr)
+
+# Comparaison des erreurs par catégorie
+test_set %>%
+  mutate(error = abs(Claim - predicted_claims)) %>%
+  group_by(Urban_rural_class) %>%
+  summarise(mean_error = mean(error)) %>%
+  arrange(mean_error)
+```
+

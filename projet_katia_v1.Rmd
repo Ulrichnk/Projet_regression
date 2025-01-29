@@ -64,101 +64,9 @@ library(ggplot2)   # Pour tracer la carte
 library(ggthemes)  # Pour améliorer le style de la carte
 
 
-
+source("functions.R")
 ```
 
-```{r, include=FALSE, echo=FALSE}
-classifier_variables_tab <- function(data_set) {
-  # Initialisation des listes
-  variables_na <- c()
-  variables_numeriques <- c()
-  variables_binaires <- c()
-  variables_categorielles <- c()
-  
-  # Parcourir les colonnes du dataset
-  for (colu in colnames(data_set)) {
-    # Vérifier si la colonne contient des valeurs NA
-    if (any(is.na(data_set[[colu]]))) {
-      variables_na <- c(variables_na, colu)
-    }
-    
-    # Vérifier si la colonne est numérique
-    if (is.numeric(data_set[[colu]])) {
-      # Vérifier si la colonne est binaire (deux valeurs uniques)
-      if (length(unique(data_set[[colu]])) == 2) {
-        variables_binaires <- c(variables_binaires, colu)
-      } else {
-        variables_numeriques <- c(variables_numeriques, colu)
-      }
-    } else {
-      # Gérer les colonnes non numériques
-      if (length(unique(data_set[[colu]])) == 2) {
-        variables_binaires <- c(variables_binaires, colu)
-      } else {
-        variables_categorielles <- c(variables_categorielles, colu)
-      }
-    }
-  }
-  
-  # Création du résultat sous forme de liste
-  resultat <- list(
-    variables_na = variables_na,
-    variables_numeriques = variables_numeriques,
-    variables_binaires = variables_binaires,
-    variables_categorielles = variables_categorielles
-  )
-  
-  return(resultat)
-}
-
-
-
-classifier_variables <- function(data_set) {
-  # Initialisation des listes
-  variables_na <- c()
-  variables_numeriques <- c()
-  variables_binaires <- c()
-  variables_categorielles <- c()
-  
-  # Parcourir les colonnes du jeu de données
-  for (colu in colnames(data_set)) {
-    # Vérifier si la colonne contient des valeurs NA
-    if (any(is.na(data_set[[colu]]))) {
-      variables_na <- c(variables_na, colu)
-    }
-    
-    # Vérifier si la colonne est numérique
-    if (is.numeric(data_set[[colu]])) {
-      # Vérifier si la colonne est binaire (deux valeurs uniques)
-      if (length(unique(data_set[[colu]])) == 2) {
-        variables_binaires <- c(variables_binaires, colu)
-      } else {
-        variables_numeriques <- c(variables_numeriques, colu)
-      }
-    } else {
-      # Gérer les colonnes non numériques
-      if (length(unique(data_set[[colu]])) == 2) {
-        variables_binaires <- c(variables_binaires, colu)
-      } else {
-        variables_categorielles <- c(variables_categorielles, colu)
-      }
-    }
-  }
-  
-  # Création du tableau final
-  variables <- data.frame(
-    Type = c("Variables NA", "Variables Numériques", "Variables Binaires", "Variables Catégorielles"),
-    Colonnes = c(
-      paste(variables_na, collapse = ", "),
-      paste(variables_numeriques, collapse = ", "),
-      paste(variables_binaires, collapse = ", "),
-      paste(variables_categorielles, collapse = ", ")
-    )
-  )
-  
-}
-
-```
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(
@@ -174,12 +82,13 @@ knitr::opts_chunk$set(
 
 D'abord, on importe les données et on affiche un aperçu de celles-ci:
 ```{r}
+
 #importation des données
-train<-read.csv('train_set.csv', header = T, sep = ",",dec=".")
-test<-read.csv('test_set.csv', header = T, sep = ",",dec=".")
+train<-read.csv('./data/train_set.csv', header = T, sep = ",",dec=".")
+test<-read.csv('./data/test_set.csv', header = T, sep = ",",dec=".")
 
 #appercu des données
-rmarkdown::paged_table(train)
+rmarkdown::paged_table(test)
 
 ```
 
@@ -370,8 +279,6 @@ ggplot(old_france_map) +
     title = "Répartition des sinistres (Claim) par région en France",
     fill = "Total Claim"
   )
-print(sum(train_old$Claim))
-#print(1-sum(train_old$Claim)/dim(train_old))
 ```
 
 On divise notre dataset à présent entre variable cible et variables explicatives.
@@ -697,16 +604,7 @@ summary(res_pca)
 
 
 
-```{r}
 
-# Visualisation avec coloration par la variable "Claim"
-library(factoextra)
-train_1$Claim <- as.factor(train_1$Claim)  # Assurez-vous que Claim est un facteur
-fviz_pca_ind(res_pca, habillage = "Claim", repel = TRUE, addEllipses = TRUE, 
-             ellipse.level = 0.95, pointsize = 2)
-
-
-```
 
 ### **2. Distribution de l’âge des conducteurs**
 
