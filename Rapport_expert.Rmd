@@ -36,32 +36,65 @@ library(corrplot)
 
 # Introduction 
 
-# Observation des données 
+# Analyse des données 
 
 ## Importation des données 
-
+On commençe par importer nos jeux de données `train` et `test`. Puis on affiche le `train` afin d'observer l'allure des données. 
 ```{r}
 # Téléchargement du jeu de données 
-train<-read.csv('train_set.csv', header = T, sep = ",",dec=".")
-testX<-read.csv('test_set.csv', header = T, sep = ",",dec=".")
+train<-read.csv('./data/train_set.csv', header = T, sep = ",",dec=".")
+test<-read.csv('./data/test_set.csv', header = T, sep = ",",dec=".")
 set.seed(2025)
 
 # Affichage du jeu de données sous forme de tableau
 rmarkdown::paged_table(train)
 ```
+Ensuite on affiche un tableau affichant le nom de chaque variable avec son type et le nombre de valeurs manquantes pour chacune d'entre elles. 
 ```{r}
 variable_summary <- data.frame(
-  Variable = colnames(train),
   Type = sapply(train, class),
-  Missing_Values = sapply(data, function(x) sum(is.na(x))))
+  Missing_Values = sapply(train, function(x) sum(is.na(x))))
 
 variable_summary %>%
   kable(format = "html", caption = "Résumé des variables") %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
 ```
+On remarque qu'il n' y a aucune valeurs manquantes.
+
 ```{r}
-summary(data)
+summary(train)
 `````
+
+## Transformation des données 
+
+```{r}
+#Supprimer la variable PolID
+train<-train %>% select(-PolID)
+test<-test %>% select(-PolID)
+```
+
+```{r}
+#Transformer la variable Bonus_Malus en variables binaire 
+train$Bonus_Malus <- ifelse(train$Bonus_Malus < 100, "Bonus", "Malus")
+test$Bonus_Malus <- ifelse(test$Bonus_Malus < 100, "Bonus", "Malus")
+```
+
+```{r}
+# Transformer les variables catégorielles en facteurs
+train$Car_Model <- as.factor(train$Car_Model)
+train$Car_Fuel <- as.factor(train$Car_Fuel)
+train$Urban_rural_class <- as.factor(train$Urban_rural_class)
+train$French_region <- as.factor(train$French_region)
+train$Bonus_Malus <- as.factor (train$Bonus_Malus)
+````
+
+```{r}
+summary(train)
+```
+
+
+## Corrélation entre les variables 
+
 ```{r}
 # Matrice de corrélation
 cor_matrix <- cor(numeric_vars, use = "complete.obs")
@@ -70,15 +103,3 @@ cor_matrix <- cor(numeric_vars, use = "complete.obs")
 corrplot(cor_matrix, method = "color", type = "upper", 
          tl.col = "black", tl.cex = 0.8, addCoef.col = "black")
 ```
-
-## Transformation des données 
-
-```{r}
-# Transformer les variables catégorielles en facteurs
-data$Car_Model <- as.factor(data$Car_Model)
-data$Car_Fuel <- as.factor(data$Car_Fuel)
-data$Urban_rural_class <- as.factor(data$Urban_rural_class)
-data$French_region <- as.factor(data$French_region)
-
-str(data)
-````
