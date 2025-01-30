@@ -27,6 +27,7 @@ options(encoding = 'UTF-8')
 ```
 
 ```{r, include=FALSE, results = "hide", message = FALSE, warning = FALSE}
+source("functions.R")
 library(ggplot2)
 library(dplyr)
 library(rmarkdown)
@@ -91,9 +92,18 @@ train$Bonus_Malus <- as.factor (train$Bonus_Malus)
 ```{r}
 summary(train)
 ```
+## Distribution de la variable cible 
 
+```{r}
+plot_percentage(train,"Claim",5)
+```
 
 ## Corrélation entre les variables 
+
+```{r}
+numeric_vars <- train[, sapply(train, is.numeric)]
+```
+
 
 ```{r}
 # Matrice de corrélation
@@ -103,3 +113,4 @@ cor_matrix <- cor(numeric_vars, use = "complete.obs")
 corrplot(cor_matrix, method = "color", type = "upper", 
          tl.col = "black", tl.cex = 0.8, addCoef.col = "black")
 ```
+
