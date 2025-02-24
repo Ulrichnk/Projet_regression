@@ -33,6 +33,9 @@ library(dplyr)
 library(rmarkdown)
 library(kableExtra)
 library(corrplot)
+library(tidyr)
+library(GGally)
+library(caret)
 `````
 
 # Introduction 
@@ -51,6 +54,7 @@ set.seed(2025)
 rmarkdown::paged_table(train)
 ```
 Ensuite on affiche un tableau affichant le nom de chaque variable avec son type et le nombre de valeurs manquantes pour chacune d'entre elles. 
+
 ```{r}
 variable_summary <- data.frame(
   Type = sapply(train, class),
@@ -66,7 +70,7 @@ On remarque qu'il n' y a aucune valeurs manquantes.
 summary(train)
 `````
 
-## Transformation des données 
+## Observations et transformation des données 
 
 ```{r}
 #Supprimer la variable PolID
@@ -75,11 +79,34 @@ test<-test %>% select(-PolID)
 ```
 
 ```{r}
-#Transformer la variable Bonus_Malus en variables binaire 
-train$Bonus_Malus <- ifelse(train$Bonus_Malus < 100, "Bonus", "Malus")
-test$Bonus_Malus <- ifelse(test$Bonus_Malus < 100, "Bonus", "Malus")
+numeric_cols <- c("Claim", "Period_Exp", "Car_Power", "Car_Age", "Age", "Bonus_Malus", "Inhab_density")
+categorical_cols <- c("Car_Model", "Car_Fuel", "Urban_rural_class", "French_region")
 ```
 
+```{r}
+# Transformation des données au format long pour ggplot2
+train_long <- train %>%
+  select(all_of(numeric_cols)) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Valeur")
+
+# Création des boxplots
+ggplot(train_long, aes(x = Variable, y = Valeur)) +
+  geom_boxplot(fill = "lightblue", outlier.color = "red", outlier.shape = 16) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Distribution des variables numériques avec les valeurs extrêmes",
+       x = "Variables", y = "Valeurs")
+```
+
+
+```{r}
+# Nombre de catégories par variable
+cat_counts <- sapply(train[categorical_cols], function(x) length(unique(x)))
+
+# Affichage des résultats
+print(cat_counts)
+```
+ 
 ```{r}
 # Transformer les variables catégorielles en facteurs
 train$Car_Model <- as.factor(train$Car_Model)
@@ -90,27 +117,85 @@ train$Bonus_Malus <- as.factor (train$Bonus_Malus)
 ````
 
 ```{r}
-summary(train)
+#Transformer la variable Bonus_Malus en variables binaire 
+#train$Bonus_Malus <- ifelse(train$Bonus_Malus < 100, "Bonus", "Malus")
+#test$Bonus_Malus <- ifelse(test$Bonus_Malus < 100, "Bonus", "Malus")
 ```
-## Distribution de la variable cible 
 
 ```{r}
+summary(train)
+```
+
+```{r}
+# Distribution de la variable cible 
 plot_percentage(train,"Claim",5)
 ```
+La distribution de la variable cible `Claim` montre un fort déséquilibre dans les données. En effet, 96.32% des contrats n’ont enregistré aucun sinistre, tandis que seulement 3.48% en comptent un, et les cas avec deux sinistres ou plus sont extrêmement rares (moins de 0.2%). Ce désiquilibre pose un défi en modélisation. Un modèle classique risque d’être biaisé en faveur des prédictions nulles, réduisant ainsi sa capacité à identifier les cas de sinistre.
+
+Plusieurs stratégies peuvent alors être envisagées. On pourrait utiliser un modèle de comptage, comme une régression de Poisson ou une régression binomiale négative, qui sont adaptées aux variables discrètes et asymétriques. D'autre part, une approche basée sur le rééchantillonnage (sous-échantillonnage des contrats sans sinistre ou sur-échantillonnage des sinistres) pourrait améliorer l’apprentissage du modèle. Une autre alternative serait de transformer le problème en classification binaire (sinistre vs. pas de sinistre) avec une régression logistique.
 
 ## Corrélation entre les variables 
 
 ```{r}
-numeric_vars <- train[, sapply(train, is.numeric)]
+# Convertir les variables catégorielles en nombres
+train$Bonus_Malus <- as.numeric(as.factor(train$Bonus_Malus))
+train$Car_Model <- as.numeric(as.factor(train$Car_Model))
+train$Car_Fuel <- as.numeric(as.factor(train$Car_Fuel))
+train$Urban_rural_class <- as.numeric(as.factor(train$Urban_rural_class))
+train$French_region <- as.numeric(as.factor(train$French_region))
+
+ggcorr(train, label = TRUE, label_round = 2, low = "blue", mid = "white", high = "red", size = 2.5) + 
+  ggtitle("Matrice de corrélation des variables") +
+  theme(axis.text.x = element_text(angle = 40, hjust = 0,5, size = 3),  # Rotation + réduction taille
+        axis.text.y = element_text(size = 2))  # Taille réduite sur l'axe Y
 ```
 
+Après analyse de la matrice, on remarque une corrélation négative entre l'âge du conducteur `Age` et le coefficient `Bonus_Malus` (-0.48) est significative. Elle traduit le fait que les conducteurs plus jeunes ont tendance à accumuler plus de malus, tandis que les conducteurs plus expérimentés bénéficient d'un bonus. Une autre relation forte apparaît entre la densité d’habitants `Inhab_density` et la classe urbaine `Urban_rural_class` (0.59), confirmant que les zones urbaines ont une densité de population plus élevée.
+
+La variable cible `Claim` (nombre de sinistres) n’entretient que de faibles corrélations avec les autres variables. Par exemple, la période d’exposition `Period_Exp` est légèrement corrélée avec le nombre de sinistres (0.09), ce qui est intuitif : plus une assurance est active longtemps, plus elle a de chances d’être associée à un sinistre. Cependant, les autres variables, comme l’âge du conducteur, la puissance du véhicule `Car_Power` ou le type de carburant `Car_Fuel`, montrent des relations très faibles avec `Claim`, montrant que ces facteurs seuls n’expliquent pas directement la survenue des sinistres.
 
 ```{r}
-# Matrice de corrélation
-cor_matrix <- cor(numeric_vars, use = "complete.obs")
-
-# Affichage de la moitié supérieure uniquement
-corrplot(cor_matrix, method = "color", type = "upper", 
-         tl.col = "black", tl.cex = 0.8, addCoef.col = "black")
+train
 ```
+
+
+# Modèle Régression de Poisson 
+
+```{r}
+# Calcul de la moyenne et de la variance de Claim
+mean_claim <- mean(train$Claim)
+var_claim <- var(train$Claim)
+
+cat("Moyenne de Claim :", mean_claim, "\n")
+cat("Variance de Claim :", var_claim, "\n")
+```
+L’analyse des caractéristiques de la variable cible Claim montre que sa moyenne (0.0389) et sa variance (0.0422) sont très proches, ce qui est un bon indicateur de l’adéquation avec une distribution de Poisson.
+
+```{r}
+# Ajustement du modèle de Poisson
+poisson_model <- glm(Claim ~ ., data = train, family = poisson(link = "log"))
+
+# Résumé des coefficients du modèle
+summary(poisson_model)
+```
+```{r}
+dispersion <- sum(residuals(poisson_model, type = "pearson")^2) / poisson_model$df.residual
+cat("Indice de dispersion :", dispersion, "\n")
+```
+
+```{r}
+set.seed(42)
+
+# Création de l'index pour séparer les données (80% train, 20% test)
+trainIndex <- createDataPartition(train$Claim, p = 0.8, list = FALSE)
+
+# Création des datasets train et test
+train_set <- train[trainIndex, ]
+test_set  <- train[-trainIndex, ]
+
+# Vérification des dimensions
+cat("Taille du dataset d'entraînement :", nrow(train_set), "\n")
+cat("Taille du dataset de test :", nrow(test_set), "\n")
+```
+
 
