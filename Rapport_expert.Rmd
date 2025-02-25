@@ -36,6 +36,9 @@ library(corrplot)
 library(tidyr)
 library(GGally)
 library(caret)
+library(rsample) 
+library(glmnet)
+library(MASS)
 `````
 
 # Introduction 
@@ -169,7 +172,8 @@ var_claim <- var(train$Claim)
 cat("Moyenne de Claim :", mean_claim, "\n")
 cat("Variance de Claim :", var_claim, "\n")
 ```
-L’analyse des caractéristiques de la variable cible Claim montre que sa moyenne (0.0389) et sa variance (0.0422) sont très proches, ce qui est un bon indicateur de l’adéquation avec une distribution de Poisson.
+La variable cible Claim est une variable de type comptage (nombre de sinistres), souvent modélisée avec une loi de Poisson.
+Ainsi que l’analyse des caractéristiques de la variable cible Claim montre que sa moyenne (0.0389) et sa variance (0.0422) sont très proches, ce qui est un bon indicateur de l’adéquation avec une distribution de Poisson.
 
 ```{r}
 # Ajustement du modèle de Poisson
@@ -181,21 +185,115 @@ summary(poisson_model)
 ```{r}
 dispersion <- sum(residuals(poisson_model, type = "pearson")^2) / poisson_model$df.residual
 cat("Indice de dispersion :", dispersion, "\n")
+# Si dispersion > 1, il y a une sur-dispersion
+if (dispersion > 1) {
+    print("Attention : sur-dispersion détectée")
+}
+```
+
+
+#Modélisation avec la régression binomiale négative
+La régression binomiale négative est une extension de la régression de Poisson, adaptée aux données présentant une sur-dispersion.
+```{r}
+set.seed(2025)
+# Utiliser la fonction initial_split pour l'échantillonnage stratifié
+splits <- initial_split(train, prop = 0.8, strata = "Claim")
+train_set <- training(splits)
+test_set <- testing(splits)
+cat("Taille de l'ensemble d'entraînement:", nrow(train_set), "\n")
+cat("Taille de l'ensemble de test:", nrow(test_set), "\n")
+
+# Fonction de standardisation - problème résolu
+standardize_data <- function(data, target_col) {
+  # Identifier les colonnes à standardiser (toutes sauf la variable cible)
+  cols_to_standardize <- setdiff(names(data), target_col)
+  result <- data
+  # Standardiser uniquement les colonnes numériques
+  for (col in cols_to_standardize) {
+    if (is.numeric(data[[col]])) {
+      result[[col]] <- scale(data[[col]])
+    }
+  }
+  return(result)
+}
+
+# Appliquer la fonction de standardisation
+train_standardized <- standardize_data(train_set, "Claim")
+
+# Afficher un aperçu des données standardisées
+head(train_standardized)
 ```
 
 ```{r}
-set.seed(42)
+# Modèle binomial négatif
+nb_model_full <- glm.nb(Claim ~ ., data = train_standardized)
+summary(nb_model_full)
 
-# Création de l'index pour séparer les données (80% train, 20% test)
-trainIndex <- createDataPartition(train$Claim, p = 0.8, list = FALSE)
-
-# Création des datasets train et test
-train_set <- train[trainIndex, ]
-test_set  <- train[-trainIndex, ]
-
-# Vérification des dimensions
-cat("Taille du dataset d'entraînement :", nrow(train_set), "\n")
-cat("Taille du dataset de test :", nrow(test_set), "\n")
 ```
 
+
+```{r}
+# Extraction des coefficients du modèle complet
+coef_df <- as.data.frame(summary(nb_model_full)$coefficients)
+coef_df$Variable <- rownames(coef_df)
+
+# Visualisation des coefficients (impact des variables)
+ggplot(coef_df, aes(x = reorder(Variable, Estimate), y = Estimate)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_bw() +
+  labs(title = "Impact des variables sur les sinistres (Modèle binomial négatif)",
+       x = "Variable", y = "Coefficient")
+
+```
+
+```{r}
+coef_poisson <- coef(poisson_model)
+coef_nb <- coef(nb_model_full)
+comparison <- data.frame(Poisson = coef_poisson, BinomialNegatif = coef_nb)
+print(comparison)
+```
+
+Pour choisir le meilleur modèle, on compare les critères de sélection comme l'AIC ou le BIC et les mesures de performance (ex: RMSE_C): 
+```{r}
+# Comparaison des AIC pour le modèle de Poisson et le modèle binomial négatif
+AIC(poisson_model, nb_model_full)
+
+```
+
+
+#Modèle Lasso
+L’utilisation du modèle Lasso est pertinente car elle permet de sélectionner automatiquement les variables les plus influentes en réduisant à zéro celles qui sont peu significatives, ce qui simplifie le modèle et améliore son interprétation. De plus, elle aide à réduire la multicolinéarité en pénalisant les variables fortement corrélées. Adapté aux modèles de régression de Poisson, Lasso permet ainsi d’obtenir un modèle plus stable, efficace et optimisé pour la prédiction du nombre de sinistres.
+```{r}
+X_train <- model.matrix(Claim ~ . - 1, data = train_standardized)  # Retire l'intercept
+y_train <- train_standardized$Claim
+```
+
+Trouver le paramètre optimal lambda
+```{r}
+# Lasso avec validation croisée
+lasso_cv <- cv.glmnet(X_train, y_train, alpha = 1, family = "poisson")
+
+print(paste("Lambda optimal :", lasso_cv$lambda.min))
+
+lasso_model <- glmnet(X_train, y_train, alpha = 1, lambda = lasso_cv$lambda.min, family = "poisson")
+print(lasso_model)
+
+```
+
+Sélectionner les variables significatives (les coeffs ne s'égalent pas à 0):
+```{r}
+coefficients <- coef(lasso_model)
+significant_vars <- rownames(coefficients)[coefficients[, 1] != 0]
+print("Variables significatives sélectionnées par Lasso :")
+print(significant_vars)
+
+```
+
+```{r}
+formula <- as.formula(paste("Claim ~", paste(significant_vars[-1], collapse = " + ")))  # Retire "(Intercept)"
+lasso_model <- glm(formula, data = train_standardized, family = poisson(link = "log"))
+summary(lasso_model)
+
+```
 
