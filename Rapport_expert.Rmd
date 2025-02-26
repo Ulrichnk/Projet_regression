@@ -78,8 +78,8 @@ summary(train)
 
 ```{r}
 #Supprimer la variable PolID
-train<-train %>% select(-PolID)
-test<-test %>% select(-PolID)
+train <- subset(train, select = -PolID)
+test <- subset(test, select = -PolID)
 ```
 
 ```{r}
@@ -101,8 +101,31 @@ train$Car_Model <- as.factor(train$Car_Model)
 train$Car_Fuel <- as.factor(train$Car_Fuel)
 train$Urban_rural_class <- as.factor(train$Urban_rural_class)
 train$French_region <- as.factor(train$French_region)
-train$Bonus_Malus <- as.factor (train$Bonus_Malus)
 ````
+
+```{r}
+# Charger ggplot2 pour la visualisation
+library(ggplot2)
+
+# Tracer l'histogramme de la variable Bonus_Malus
+ggplot(train, aes(x = Bonus_Malus)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution de la variable Bonus_Malus",
+       x = "Bonus_Malus",
+       y = "Fréquence") +
+  theme_minimal()
+
+```
+```{r}
+# Compter le nombre de lignes pour chaque valeur unique de Bonus_Malus
+bonus_malus_counts <- as.data.frame(table(train$Bonus_Malus))
+
+# Renommer les colonnes
+colnames(bonus_malus_counts) <- c("Bonus_Malus", "Nombre_Lignes")
+
+# Afficher le tableau
+print(bonus_malus_counts)
+```
 
 ```{r}
 #Transformer la variable Bonus_Malus en variables binaire 
@@ -132,15 +155,6 @@ ggplot(train_long, aes(x = Variable, y = Valeur)) +
        x = "Variables", y = "Valeurs")
 ```
 
-
-
- 
-
-
-
-
-
-
 ```{r}
 # Distribution de la variable cible 
 plot_percentage(train,"Claim",5)
@@ -153,7 +167,6 @@ Plusieurs stratégies peuvent alors être envisagées. On pourrait utiliser un m
 
 ```{r}
 # Convertir les variables catégorielles en nombres
-train$Bonus_Malus <- as.numeric(as.factor(train$Bonus_Malus))
 train$Car_Model <- as.numeric(as.factor(train$Car_Model))
 train$Car_Fuel <- as.numeric(as.factor(train$Car_Fuel))
 train$Urban_rural_class <- as.numeric(as.factor(train$Urban_rural_class))
@@ -171,6 +184,15 @@ La variable cible `Claim` (nombre de sinistres) n’entretient que de faibles co
 
 ```{r}
 train
+```
+```{r}
+# 🔹 Conversion des variables catégorielles en facteurs
+categorical_vars <- c("Car_Model", "Car_Fuel", "Urban_rural_class", "French_region")
+
+# Appliquer la transformation à toutes les variables catégorielles
+train[categorical_vars] <- lapply(train[categorical_vars], as.factor)
+
+str(train)
 ```
 
 
@@ -200,9 +222,7 @@ y_train <- train$Claim[trainIndex]  # Variable cible
 
 X_test <- train[-trainIndex, setdiff(names(train), "Claim")]  # Prédicteurs uniquement
 y_test <- train$Claim[-trainIndex]  # Variable cible
-```
 
-```{r}
 
 # Affichage des tailles des ensembles
 cat("📏 Taille du jeu d'entraînement :\n")
@@ -214,13 +234,42 @@ cat("- X_test :", dim(X_test), "\n")
 cat("- y_test :", length(y_test), "\n")
 ```
 ```{r}
+X_train
+```
+
+
+```{r}
+numeric_cols <- names(X_train)[sapply(X_train, is.numeric)]
+# Créer l'objet de standardisation sur les prédicteurs numériques de X_train
+scaler <- preProcess(X_train[, numeric_cols], method = c("center", "scale"))
+
+# Appliquer la transformation sur X_train et X_test
+X_train_scaled <- X_train
+X_test_scaled <- X_test
+
+X_train_scaled[, numeric_cols] <- predict(scaler, X_train[, numeric_cols])
+X_test_scaled[, numeric_cols] <- predict(scaler, X_test[, numeric_cols])
+```
+
+```{r}
+summary(X_train_scaled[, numeric_cols])
+summary(X_test_scaled[, numeric_cols])
+```
+
+```{r}
+X_train_scaled
+```
+
+
+```{r}
 # Ajustement du modèle de Poisson sur le jeu d'entraînement
-poisson_model1 <- glm(y_train ~ ., data = X_train, family = poisson(link = "log"))
+poisson_model1 <- glm(y_train ~ ., data = X_train_scaled, family = poisson(link = "log"))
 
 # Résumé du modèle
 summary(poisson_model1)
-
-dispersion <- sum(residuals(poisson_model, type = "pearson")^2) / poisson_model$df.residual
+```
+```{r}
+dispersion <- sum(residuals(poisson_model1, type = "pearson")^2) / poisson_model1$df.residual
 cat("Indice de dispersion :", dispersion, "\n")
 # Si dispersion > 1, il y a une sur-dispersion
 if (dispersion > 1) {
@@ -228,104 +277,26 @@ if (dispersion > 1) {
 }
 ```
 
-
-#Modélisation avec la régression binomiale négative
-La régression binomiale négative est une extension de la régression de Poisson, adaptée aux données présentant une sur-dispersion.
-```{r}
-set.seed(2025)
-# Utiliser la fonction initial_split pour l'échantillonnage stratifié
-splits <- initial_split(train, prop = 0.8, strata = "Claim")
-train_set <- training(splits)
-test_set <- testing(splits)
-cat("Taille de l'ensemble d'entraînement:", nrow(train_set), "\n")
-cat("Taille de l'ensemble de test:", nrow(test_set), "\n")
-
-# Fonction de standardisation - problème résolu
-standardize_data <- function(data, target_col) {
-  # Identifier les colonnes à standardiser (toutes sauf la variable cible)
-  cols_to_standardize <- setdiff(names(data), target_col)
-  result <- data
-  # Standardiser uniquement les colonnes numériques
-  for (col in cols_to_standardize) {
-    if (is.numeric(data[[col]])) {
-      result[[col]] <- scale(data[[col]])
-    }
-  }
-  return(result)
-}
-
-# Appliquer la fonction de standardisation
-train_standardized <- standardize_data(train_set, "Claim")
-
-# Afficher un aperçu des données standardisées
-head(train_standardized)
-```
-
-```{r}
-# Modèle binomial négatif
-nb_model_full <- glm.nb(Claim ~ ., data = train_standardized)
-summary(nb_model_full)
-
-```
-
-
-```{r}
-# Extraction des coefficients du modèle complet
-coef_df <- as.data.frame(summary(nb_model_full)$coefficients)
-coef_df$Variable <- rownames(coef_df)
-
-# Visualisation des coefficients (impact des variables)
-ggplot(coef_df, aes(x = reorder(Variable, Estimate), y = Estimate)) +
-  geom_bar(stat = "identity", fill = "steelblue") +
-  coord_flip() +
-  theme_bw() +
-  labs(title = "Impact des variables sur les sinistres (Modèle binomial négatif)",
-       x = "Variable", y = "Coefficient")
-
-```
-
-```{r}
-coef_poisson <- coef(poisson_model)
-coef_nb <- coef(nb_model_full)
-comparison <- data.frame(Poisson = coef_poisson, BinomialNegatif = coef_nb)
-print(comparison)
-```
-
-Pour choisir le meilleur modèle, on compare les critères de sélection comme l'AIC ou le BIC et les mesures de performance (ex: RMSE_C): 
-```{r}
-# Comparaison des AIC pour le modèle de Poisson et le modèle binomial négatif
-AIC(poisson_model, nb_model_full)
-
-```
-
-
-#Modèle Lasso
-L’utilisation du modèle Lasso est pertinente car elle permet de sélectionner automatiquement les variables les plus influentes en réduisant à zéro celles qui sont peu significatives, ce qui simplifie le modèle et améliore son interprétation. De plus, elle aide à réduire la multicolinéarité en pénalisant les variables fortement corrélées. Adapté aux modèles de régression de Poisson, Lasso permet ainsi d’obtenir un modèle plus stable, efficace et optimisé pour la prédiction du nombre de sinistres.
-```{r}
-X_train <- model.matrix(Claim ~ . - 1, data = train_standardized)  # Retire l'intercept
-y_train <- train_standardized$Claim
-```
-
-Trouver le paramètre optimal lambda
 ```{r}
 # Prédictions sur le jeu d'entraînement
-y_train_pred <- predict(poisson_model, newdata = X_train, type = "response")
+y_train_pred1 <- predict(poisson_model1, newdata = X_train_scaled, type = "response")
 
 # Prédictions sur le jeu de test
-y_test_pred <- predict(poisson_model, newdata = X_test, type = "response")
+y_test_pred1 <- predict(poisson_model1, newdata = X_test_scaled, type = "response")
 ```
+
 
 ```{r}
 # Calcul des métriques sur le TRAIN
-train_mae <- mae(y_train, y_train_pred)
-train_rmse <- rmse(y_train, y_train_pred)
+train_mae <- mae(y_train, y_train_pred1)
+train_rmse <- rmse(y_train, y_train_pred1)
 cat("📊 Performances sur le TRAIN\n")
 cat("MAE :", train_mae, "\n")
 cat("RMSE :", train_rmse, "\n\n")
 
 # Calcul des métriques sur le TEST
-test_mae <- mae(y_test, y_test_pred)
-test_rmse <- rmse(y_test, y_test_pred)
+test_mae <- mae(y_test, y_test_pred1)
+test_rmse <- rmse(y_test, y_test_pred1)
 cat("📊 Performances sur le TEST\n")
 cat("MAE :", test_mae, "\n")
 cat("RMSE :", test_rmse, "\n")
@@ -341,10 +312,10 @@ C_4 <- which(y_test > 3)            # Classe très rare (Claim >= 4)
 
 ```{r}
 # Calcul du RMSE pour chaque classe
-rmse_1 <- ifelse(length(C_1) > 0, rmse(y_test[C_1], y_test_pred[C_1]), NA)
-rmse_2 <- ifelse(length(C_2) > 0, rmse(y_test[C_2], y_test_pred[C_2]), NA)
-rmse_3 <- ifelse(length(C_3) > 0, rmse(y_test[C_3], y_test_pred[C_3]), NA)
-rmse_4 <- ifelse(length(C_4) > 0, rmse(y_test[C_4], y_test_pred[C_4]), NA)
+rmse_1 <- ifelse(length(C_1) > 0, rmse(y_test[C_1], y_test_pred1[C_1]), NA)
+rmse_2 <- ifelse(length(C_2) > 0, rmse(y_test[C_2], y_test_pred1[C_2]), NA)
+rmse_3 <- ifelse(length(C_3) > 0, rmse(y_test[C_3], y_test_pred1[C_3]), NA)
+rmse_4 <- ifelse(length(C_4) > 0, rmse(y_test[C_4], y_test_pred1[C_4]), NA)
 
 # Calcul du RMSE combiné (moyenne des RMSE des différentes classes)
 RMSE_c <- mean(c(rmse_1, rmse_2, rmse_3, rmse_4), na.rm = TRUE)
@@ -357,7 +328,7 @@ cat("📊 RMSE combiné (RMSE_c) :", RMSE_c, "\n")
 ```{r}
 # Modèle quasi-Poisson pour corriger la sous-dispersion
 quasipoisson_model <- glm(y_train ~ . - Inhab_density, 
-                          data = X_train, 
+                          data = X_train_scaled, 
                           family = quasipoisson(link = "log"))
 
 # Affichage du résumé
@@ -372,15 +343,11 @@ cat("📊 Indice de dispersion :", dispersion, "\n")
 
 
 ```{r}
-# Supprimer weights des données de test et train
-X_train <- X_train %>% select(-weights)
-X_test <- X_test %>% select(-weights)
-
 # Prédictions sur le jeu d'entraînement
-y_train_pred2 <- predict(quasipoisson_model, newdata = X_train, type = "response")
+y_train_pred2 <- predict(quasipoisson_model, newdata = X_train_scaled, type = "response")
 
 # Prédictions sur le jeu de test
-y_test_pred2 <- predict(quasipoisson_model, newdata = X_test, type = "response")
+y_test_pred2 <- predict(quasipoisson_model, newdata = X_test_scaled, type = "response")
 ```
 
 ```{r}
@@ -409,8 +376,94 @@ rmse_2.4 <- ifelse(length(C_4) > 0, rmse(y_test[C_4], y_test_pred2[C_4]), NA)
 RMSE_c2 <- mean(c(rmse_2.1, rmse_2.2, rmse_2.3, rmse_2.4), na.rm = TRUE)
 
 # Affichage du résultat
-cat("📊 RMSE combiné (RMSE_c) :", RMSE_c, "\n")
+cat("📊 RMSE combiné (RMSE_c) :", RMSE_c2, "\n")
 ```
+
+
+#Modélisation avec la régression binomiale négative
+La régression binomiale négative est une extension de la régression de Poisson, adaptée aux données présentant une sur-dispersion.
+
+```{r}
+# Modèle binomial négatif
+nb_model_full <- glm.nb(y_train ~ ., data =  X_train_scaled)
+summary(nb_model_full)
+```
+
+
+```{r}
+# Extraction des coefficients du modèle complet
+coef_df <- as.data.frame(summary(nb_model_full)$coefficients)
+coef_df$Variable <- rownames(coef_df)
+
+# Visualisation des coefficients (impact des variables)
+ggplot(coef_df, aes(x = reorder(Variable, Estimate), y = Estimate)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_bw() +
+  labs(title = "Impact des variables sur les sinistres (Modèle binomial négatif)",
+       x = "Variable", y = "Coefficient")
+
+```
+
+```{r}
+coef_poisson <- coef(poisson_model1)
+coef_nb <- coef(nb_model_full)
+comparison <- data.frame(Poisson = coef_poisson, BinomialNegatif = coef_nb)
+print(comparison)
+```
+
+Pour choisir le meilleur modèle, on compare les critères de sélection comme l'AIC ou le BIC et les mesures de performance (ex: RMSE_C): 
+```{r}
+# Comparaison des AIC pour le modèle de Poisson et le modèle binomial négatif
+AIC(poisson_model1, nb_model_full)
+```
+```{r}
+# Prédictions sur le jeu d'entraînement
+y_train_pred3 <- predict(nb_model_full, newdata = X_train_scaled, type = "response")
+
+# Prédictions sur le jeu de test
+y_test_pred3 <- predict(nb_model_full, newdata = X_test_scaled, type = "response")
+```
+
+```{r}
+# Calcul des métriques sur le TRAIN
+train_mae3 <- mae(y_train, y_train_pred3)
+train_rmse3 <- rmse(y_train, y_train_pred3)
+cat("📊 Performances sur le TRAIN\n")
+cat("MAE :", train_mae3, "\n")
+cat("RMSE :", train_rmse3, "\n\n")
+
+# Calcul des métriques sur le TEST
+test_mae3 <- mae(y_test, y_test_pred3)
+test_rmse3 <- rmse(y_test, y_test_pred3)
+cat("📊 Performances sur le TEST\n")
+cat("MAE :", test_mae3, "\n")
+cat("RMSE :", test_rmse3, "\n")
+```
+
+```{r}
+# Calcul du RMSE pour chaque classe
+rmse_3.1 <- ifelse(length(C_1) > 0, rmse(y_test[C_1], y_test_pred3[C_1]), NA)
+rmse_3.2 <- ifelse(length(C_2) > 0, rmse(y_test[C_2], y_test_pred3[C_2]), NA)
+rmse_3.3 <- ifelse(length(C_3) > 0, rmse(y_test[C_3], y_test_pred3[C_3]), NA)
+rmse_3.4 <- ifelse(length(C_4) > 0, rmse(y_test[C_4], y_test_pred3[C_4]), NA)
+
+# Calcul du RMSE combiné (moyenne des RMSE des différentes classes)
+RMSE_c3 <- mean(c(rmse_3.1, rmse_3.2, rmse_3.3, rmse_3.4), na.rm = TRUE)
+
+# Affichage du résultat
+cat("📊 RMSE combiné (RMSE_c) :", RMSE_c3, "\n")
+```
+#Modèle Lasso
+L’utilisation du modèle Lasso est pertinente car elle permet de sélectionner automatiquement les variables les plus influentes en réduisant à zéro celles qui sont peu significatives, ce qui simplifie le modèle et améliore son interprétation. De plus, elle aide à réduire la multicolinéarité en pénalisant les variables fortement corrélées. Adapté aux modèles de régression de Poisson, Lasso permet ainsi d’obtenir un modèle plus stable, efficace et optimisé pour la prédiction du nombre de sinistres.
+```{r}
+X_train <- model.matrix(Claim ~ . - 1, data = train_standardized)  # Retire l'intercept
+y_train <- train_standardized$Claim
+```
+
+Trouver le paramètre optimal lambda
+
+
 
 # Lasso avec validation croisée
 lasso_cv <- cv.glmnet(X_train, y_train, alpha = 1, family = "poisson")
