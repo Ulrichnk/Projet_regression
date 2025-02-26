@@ -34,6 +34,7 @@ library(kableExtra)
 library(corrplot)
 `````
 
+
 # Introduction 
 
 # Observation des données 
