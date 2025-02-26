@@ -36,6 +36,7 @@ library(corrplot)
 library(tidyr)
 library(GGally)
 library(caret)
+library(Metrics)
 library(rsample) 
 library(glmnet)
 library(MASS)
@@ -175,14 +176,39 @@ cat("Variance de Claim :", var_claim, "\n")
 La variable cible Claim est une variable de type comptage (nombre de sinistres), souvent modélisée avec une loi de Poisson.
 Ainsi que l’analyse des caractéristiques de la variable cible Claim montre que sa moyenne (0.0389) et sa variance (0.0422) sont très proches, ce qui est un bon indicateur de l’adéquation avec une distribution de Poisson.
 
-```{r}
-# Ajustement du modèle de Poisson
-poisson_model <- glm(Claim ~ ., data = train, family = poisson(link = "log"))
 
-# Résumé des coefficients du modèle
-summary(poisson_model)
+```{r}
+set.seed(2025)
+
+# Création de l'index pour séparer les données (80% train, 20% test)
+trainIndex <- createDataPartition(train$Claim, p = 0.8, list = FALSE)
+
+# Séparer les prédicteurs (X) et la variable cible (y)
+X_train <- train[trainIndex, setdiff(names(train), "Claim")]  # Prédicteurs uniquement
+y_train <- train$Claim[trainIndex]  # Variable cible
+
+X_test <- train[-trainIndex, setdiff(names(train), "Claim")]  # Prédicteurs uniquement
+y_test <- train$Claim[-trainIndex]  # Variable cible
+```
+
+```{r}
+
+# Affichage des tailles des ensembles
+cat("📏 Taille du jeu d'entraînement :\n")
+cat("- X_train :", dim(X_train), "\n")
+cat("- y_train :", length(y_train), "\n\n")
+
+cat("📏 Taille du jeu de test :\n")
+cat("- X_test :", dim(X_test), "\n")
+cat("- y_test :", length(y_test), "\n")
 ```
 ```{r}
+# Ajustement du modèle de Poisson sur le jeu d'entraînement
+poisson_model1 <- glm(y_train ~ ., data = X_train, family = poisson(link = "log"))
+
+# Résumé du modèle
+summary(poisson_model1)
+
 dispersion <- sum(residuals(poisson_model, type = "pearson")^2) / poisson_model$df.residual
 cat("Indice de dispersion :", dispersion, "\n")
 # Si dispersion > 1, il y a une sur-dispersion
@@ -271,6 +297,110 @@ y_train <- train_standardized$Claim
 
 Trouver le paramètre optimal lambda
 ```{r}
+# Prédictions sur le jeu d'entraînement
+y_train_pred <- predict(poisson_model, newdata = X_train, type = "response")
+
+# Prédictions sur le jeu de test
+y_test_pred <- predict(poisson_model, newdata = X_test, type = "response")
+```
+
+```{r}
+# Calcul des métriques sur le TRAIN
+train_mae <- mae(y_train, y_train_pred)
+train_rmse <- rmse(y_train, y_train_pred)
+cat("📊 Performances sur le TRAIN\n")
+cat("MAE :", train_mae, "\n")
+cat("RMSE :", train_rmse, "\n\n")
+
+# Calcul des métriques sur le TEST
+test_mae <- mae(y_test, y_test_pred)
+test_rmse <- rmse(y_test, y_test_pred)
+cat("📊 Performances sur le TEST\n")
+cat("MAE :", test_mae, "\n")
+cat("RMSE :", test_rmse, "\n")
+```
+
+```{r}
+# Définition des classes basées sur la fréquence des valeurs de Claim
+C_1 <- which(y_test %in% c(0, 1))  # Classe très fréquente (Claim = 0 ou 1)
+C_2 <- which(y_test == 2)           # Classe fréquente (Claim = 2)
+C_3 <- which(y_test == 3)           # Classe rare (Claim = 3)
+C_4 <- which(y_test > 3)            # Classe très rare (Claim >= 4)
+```
+
+```{r}
+# Calcul du RMSE pour chaque classe
+rmse_1 <- ifelse(length(C_1) > 0, rmse(y_test[C_1], y_test_pred[C_1]), NA)
+rmse_2 <- ifelse(length(C_2) > 0, rmse(y_test[C_2], y_test_pred[C_2]), NA)
+rmse_3 <- ifelse(length(C_3) > 0, rmse(y_test[C_3], y_test_pred[C_3]), NA)
+rmse_4 <- ifelse(length(C_4) > 0, rmse(y_test[C_4], y_test_pred[C_4]), NA)
+
+# Calcul du RMSE combiné (moyenne des RMSE des différentes classes)
+RMSE_c <- mean(c(rmse_1, rmse_2, rmse_3, rmse_4), na.rm = TRUE)
+
+# Affichage du résultat
+cat("📊 RMSE combiné (RMSE_c) :", RMSE_c, "\n")
+```
+
+
+```{r}
+# Modèle quasi-Poisson pour corriger la sous-dispersion
+quasipoisson_model <- glm(y_train ~ . - Inhab_density, 
+                          data = X_train, 
+                          family = quasipoisson(link = "log"))
+
+# Affichage du résumé
+summary(quasipoisson_model)
+```
+```{r}
+# 4️⃣ Vérification de la dispersion du modèle Poisson
+dispersion <- sum(residuals(poisson_model2, type = "pearson")^2) / poisson_model2$df.residual
+cat("📊 Indice de dispersion :", dispersion, "\n")
+```
+
+
+
+```{r}
+# Supprimer weights des données de test et train
+X_train <- X_train %>% select(-weights)
+X_test <- X_test %>% select(-weights)
+
+# Prédictions sur le jeu d'entraînement
+y_train_pred2 <- predict(quasipoisson_model, newdata = X_train, type = "response")
+
+# Prédictions sur le jeu de test
+y_test_pred2 <- predict(quasipoisson_model, newdata = X_test, type = "response")
+```
+
+```{r}
+# Calcul des métriques sur le TRAIN
+train_mae2 <- mae(y_train, y_train_pred2)
+train_rmse2 <- rmse(y_train, y_train_pred2)
+cat("📊 Performances sur le TRAIN\n")
+cat("MAE :", train_mae2, "\n")
+cat("RMSE :", train_rmse2, "\n\n")
+
+# Calcul des métriques sur le TEST
+test_mae2 <- mae(y_test, y_test_pred2)
+test_rmse2 <- rmse(y_test, y_test_pred2)
+cat("📊 Performances sur le TEST\n")
+cat("MAE :", test_mae2, "\n")
+cat("RMSE :", test_rmse2, "\n")
+```
+```{r}
+# Calcul du RMSE pour chaque classe
+rmse_2.1 <- ifelse(length(C_1) > 0, rmse(y_test[C_1], y_test_pred2[C_1]), NA)
+rmse_2.2 <- ifelse(length(C_2) > 0, rmse(y_test[C_2], y_test_pred2[C_2]), NA)
+rmse_2.3 <- ifelse(length(C_3) > 0, rmse(y_test[C_3], y_test_pred2[C_3]), NA)
+rmse_2.4 <- ifelse(length(C_4) > 0, rmse(y_test[C_4], y_test_pred2[C_4]), NA)
+
+# Calcul du RMSE combiné (moyenne des RMSE des différentes classes)
+RMSE_c2 <- mean(c(rmse_2.1, rmse_2.2, rmse_2.3, rmse_2.4), na.rm = TRUE)
+
+# Affichage du résultat
+cat("📊 RMSE combiné (RMSE_c) :", RMSE_c, "\n")
+```
+
 # Lasso avec validation croisée
 lasso_cv <- cv.glmnet(X_train, y_train, alpha = 1, family = "poisson")
 
