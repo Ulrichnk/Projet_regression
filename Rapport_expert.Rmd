@@ -74,7 +74,7 @@ On remarque qu'il n' y a aucune valeurs manquantes.
 summary(train)
 `````
 
-## Observations et transformation des données 
+## Transformation des données 
 
 ```{r}
 #Supprimer la variable PolID
@@ -86,6 +86,36 @@ test<-test %>% select(-PolID)
 numeric_cols <- c("Claim", "Period_Exp", "Car_Power", "Car_Age", "Age", "Bonus_Malus", "Inhab_density")
 categorical_cols <- c("Car_Model", "Car_Fuel", "Urban_rural_class", "French_region")
 ```
+
+```{r}
+# Nombre de catégories par variable
+cat_counts <- sapply(train[categorical_cols], function(x) length(unique(x)))
+
+# Affichage des résultats
+print(cat_counts)
+```
+
+```{r}
+# Transformer les variables catégorielles en facteurs
+train$Car_Model <- as.factor(train$Car_Model)
+train$Car_Fuel <- as.factor(train$Car_Fuel)
+train$Urban_rural_class <- as.factor(train$Urban_rural_class)
+train$French_region <- as.factor(train$French_region)
+train$Bonus_Malus <- as.factor (train$Bonus_Malus)
+````
+
+```{r}
+#Transformer la variable Bonus_Malus en variables binaire 
+#train$Bonus_Malus <- ifelse(train$Bonus_Malus < 100, "Bonus", "Malus")
+#test$Bonus_Malus <- ifelse(test$Bonus_Malus < 100, "Bonus", "Malus")
+```
+
+```{r}
+#Vérification
+summary(train)
+```
+
+## Observations des distributions 
 
 ```{r}
 # Transformation des données au format long pour ggplot2
@@ -103,32 +133,13 @@ ggplot(train_long, aes(x = Variable, y = Valeur)) +
 ```
 
 
-```{r}
-# Nombre de catégories par variable
-cat_counts <- sapply(train[categorical_cols], function(x) length(unique(x)))
 
-# Affichage des résultats
-print(cat_counts)
-```
  
-```{r}
-# Transformer les variables catégorielles en facteurs
-train$Car_Model <- as.factor(train$Car_Model)
-train$Car_Fuel <- as.factor(train$Car_Fuel)
-train$Urban_rural_class <- as.factor(train$Urban_rural_class)
-train$French_region <- as.factor(train$French_region)
-train$Bonus_Malus <- as.factor (train$Bonus_Malus)
-````
 
-```{r}
-#Transformer la variable Bonus_Malus en variables binaire 
-#train$Bonus_Malus <- ifelse(train$Bonus_Malus < 100, "Bonus", "Malus")
-#test$Bonus_Malus <- ifelse(test$Bonus_Malus < 100, "Bonus", "Malus")
-```
 
-```{r}
-summary(train)
-```
+
+
+
 
 ```{r}
 # Distribution de la variable cible 
