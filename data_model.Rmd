@@ -39,6 +39,7 @@ source("functions.R")
 library(rmarkdown)
 library(dplyr)
 
+
 #importation des données
 train<-read.csv('./data/train_set_clean.csv', header = T, sep = ",",dec=".")
 test<-read.csv('./data/test_set_clean.csv', header = T, sep = ",",dec=".")
@@ -112,42 +113,94 @@ train_standardized$Claim <- train_set$Claim
 
 print(paste("mean",mean(train_set$Claim)))
 print(paste("var",var(train_set$Claim)))
-```
-## ACP
 
-```{r}
-# Chargement des packages nécessaires
-library(FactoMineR)  # Pour l'ACP
-library(explor)  # Pour la visualisation des résultats
-train_test <- train %>% select(-Claim)
-# 1. Filtrer les colonnes numériques uniquement (exclure la variable cible)
-data_for_acp <- train_test[, sapply(train_test, is.numeric)]
-
-# 2. Standardiser les données
-data_for_acp_scaled <- scale(data_for_acp)
-result <- PCA(data_for_acp_scaled, graph = FALSE)
-#afficher les résultats
-explor(result)
 ```
 
 
+## clustering
+
 ```{r}
-library(factoextra)
-# 3. Appliquer l'ACP
-acp_result <- prcomp(data_for_acp_scaled, center = TRUE, scale. = TRUE)
+data_scaled <- train_standardized
+# Calcul de la matrice de distance
+dist_mat <- dist(data_scaled, method = "euclidean")
 
-# 4. Résumé des résultats
-summary(acp_result)
+# Clustering hiérarchique avec la méthode de Ward
+hc <- hclust(dist_mat, method = "ward.D2")
 
-# 5. Visualisation des résultats
-# Visualisation de la variance expliquée
-fviz_eig(acp_result)
+# Visualisation du dendrogramme
+plot(hc, cex = 0.6, hang = -1, main = "Dendrogramme du clustering hiérarchique")
 
-# Visualisation des individus dans le plan des deux premières composantes
-fviz_pca_ind(acp_result, geom.ind = "point", col.ind = train$Claim, palette = "jco", addEllipses = TRUE, legend.title = "Target")
+# Découpage du dendrogramme pour obtenir 3 clusters, par exemple
+clusters_hc <- cutree(hc, k = 3)
+table(clusters_hc)
 
-# Visualisation des variables dans le plan des deux premières composantes
-fviz_pca_var(acp_result, col.var = "contrib", gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"))
+```
+
+## modèle de régression de poisson
+
+PAckages
+```{r}
+# Installer les packages si nécessaire
+#install.packages(c("MASS", "AER", "ggplot2", "dplyr"))
+
+# Charger les packages
+library(MASS)    # Pour glm.nb
+library(AER)     # Pour dispersiontest
+library(ggplot2) # Pour la visualisation
+library(dplyr)   # Pour la manipulation de données
+
+```
+
+modèle
+```{r}
+# Ajuster le modèle de Poisson
+modele_poisson <- glm(Claim ~., 
+                      data = train_standardized, 
+                      family = poisson(link = "log"))
+
+# Résumé du modèle
+summary(modele_poisson)
+
+```
+evaluatoin de la surdipertion
+Si la statistique de dispersion est significativement supérieure à 1, cela indique une surdispersion, et un modèle binomial négatif pourrait être plus approprié.
+
+```{r}
+# Test de surdispersion
+disp_test <- dispersiontest(modele_poisson)
+print(disp_test)
+
+```
+binomial
+```{r}
+# Prédictions avec le modèle choisi (ex. modèle binomial négatif)
+train_standardized$predictions <- predict(modele_poisson, type = "response")
+
+# Comparaison observée vs prédite
+head(train_standardized[, c("Claim", "predictions")])
+
+
+```
+```{r}
+modele_poisson%>% residuals(type='response') %>% summary()
+
+```
+
+```{r}
+ggplot(train_standardized, aes(x = Claim, y = predictions)) +
+  geom_point(alpha = 0.6) +
+  geom_abline(intercept = 0, slope = 1, col = "red", linetype = "dashed") +
+  labs(title = "Observé vs Prédit", x = "Nombre de sinistres observés", y = "Nombre de sinistres prédits") +
+  theme_minimal()
+
+```
+
+
+
+
+comparaison
+```{r}
+AIC(modele_poisson, modele_nb)
 
 ```
 

@@ -1,0 +1,151 @@
+---
+title: "Regression model"
+author: "Ulrich Nguepkap Katchuang"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+    use_bookdown: true
+    lightbox: true
+    gallery: true
+    code_folding: hide
+    train_print: paged
+    theme: flatly
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+params:
+  region: France
+  year: 2025
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  tidy=TRUE
+)
+
+source("functions.R")
+```
+
+
+```{r data_display}
+library(rmarkdown)
+library(dplyr)
+
+
+#importation des données
+train<-read.csv('./data/train_set_clean.csv', header = T, sep = ",",dec=".")
+test<-read.csv('./data/test_set_clean.csv', header = T, sep = ",",dec=".")
+
+
+variables <- classifier_variables_tab(train)
+numeric_variables <- variables$variables_numeriques
+categorical_variables <- append(variables$variables_categorielles, variables$variables_binaires)
+#convertir les varianles catégorielles en factor
+train[categorical_variables] <- lapply(train[categorical_variables], factor)
+test[categorical_variables] <- lapply(test[categorical_variables], factor)
+```
+
+
+on affiche
+```{r}
+# On vérifie
+head(train)
+head(test)
+str(train)
+
+
+```
+
+on modifie la cible
+```{r}
+# Supposons que votre dataset s'appelle 'data' et que la variable s'appelle 'claim'
+
+# Création de la variable catégorielle 'claim_class'
+train$claim_class <- with(train, ifelse(Claim %in% c(0, 1),
+                                      "C1",    # Classe très fréquente : claim = 0 ou 1
+                                      ifelse(Claim == 2,
+                                             "C2",  # Classe fréquente : claim = 2
+                                             ifelse(Claim == 3,
+                                                    "C3",  # Classe rare : claim = 3
+                                                    ifelse(Claim >= 4,
+                                                           "C4",  # Classe très rare : claim >= 4
+                                                           NA)))))
+
+# Conversion en facteur avec un ordre défini (optionnel)
+train$claim_class <- factor(train$claim_class, levels = c("C1", "C2", "C3", "C4"))
+
+# Affichage du résultat
+print(train$claim_class)
+
+```
+```{r}
+# visualisation des classes
+table(train$claim_class)
+plot_categorical(train, "claim_class")
+```
+```{r}
+# Load necessary libraries
+library(caret)
+library(randomForest)
+
+set.seed(123)  # Pour reproduire les résultats
+
+
+sampling<-function(data,target="Claim", p = 0.7) {
+    library(rsample) 
+    #Create a stratified split of the data, maintaining the proportion of classes
+    mydata_split <- initial_split(data, prop =p, strata = target)
+    #mydata_split <- initial_split(mydata, prop = .7)
+    train <- training(mydata_split)
+    test  <- testing(mydata_split)
+    return(list(train = train, test = test))
+}
+# Répartition (70% train, 30% test)
+splits <- sampling(train, target = "Claim", p = 0.9)
+
+# Accéder aux ensembles d'entraînement et de test
+train_set <- splits$train
+test_set <- splits$test
+trainData <- train_set
+testData <- test_set
+
+# Train a Random Forest model
+model <- randomForest(claim_class ~ ., data = trainData)
+
+# Make predictions on the test set
+predictions <- predict(model, testData)
+
+# Evaluate the model
+confusionMatrix(predictions, testData$claim_class)
+
+# If you want to see feature importance
+importance(model)
+varImpPlot(model)
+
+```
+
+```{r}
+# Installer et charger le package DMwR
+#install.packages("DMwR")
+data<-train
+
+library(ROSE)
+
+# Appliquer le sous-échantillonnage (ou une combinaison de sur et sous-échantillonnage)
+data_balanced <- ovun.sample(claim_class ~ ., data = data, method = "under", N = 2 * min(table(data$claim_class)))$data
+
+# Vérifier la distribution
+table(data_balanced$claim_class)
+
+
+```
+
+
