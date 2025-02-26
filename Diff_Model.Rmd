@@ -160,9 +160,9 @@ print(paste("RMSE du modèle réduit :", rmse_reduced))
 ```
 
 
-##Modèle Lasso
+#Modèle Lasso
 
-Il faut assurer que la base des données est déjà standardisation car le modèle de régularisation est très sensible à la dimension des variables.
+L’utilisation du modèle Lasso est pertinente car elle permet de sélectionner automatiquement les variables les plus influentes en réduisant à zéro celles qui sont peu significatives, ce qui simplifie le modèle et améliore son interprétation. De plus, elle aide à réduire la multicolinéarité en pénalisant les variables fortement corrélées. Adapté aux modèles de régression de Poisson, Lasso permet ainsi d’obtenir un modèle plus stable, efficace et optimisé pour la prédiction du nombre de sinistres.
 ```{r}
 X_train <- model.matrix(Claim ~ . - 1, data = train_standardized)  # Retire l'intercept
 y_train <- train_standardized$Claim
