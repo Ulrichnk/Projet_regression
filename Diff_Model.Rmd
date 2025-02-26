@@ -47,10 +47,49 @@ train_standardized <- standardize_data(train_set, "Claim")
 head(train_standardized)
 train_standardized$Claim <- train_set$Claim
 
+test_standardized <- standardize_data(train_set)
 # Vérification de la structure des données
 str(train_standardized)  
 summary(train_standardized)
 ```
+```{r}
+set.seed(2025)
+
+# Création de l'index pour séparer les données (80% train, 20% test)
+trainIndex <- createDataPartition(train$Claim, p = 0.8, list = FALSE)
+
+# Séparer les prédicteurs (X) et la variable cible (y)
+X_train <- train[trainIndex, setdiff(names(train), "Claim")]  # Prédicteurs uniquement
+y_train <- train$Claim[trainIndex]  # Variable cible
+
+X_test <- train[-trainIndex, setdiff(names(train), "Claim")]  # Prédicteurs uniquement
+y_test <- train$Claim[-trainIndex]  # Variable cible
+
+
+# Affichage des tailles des ensembles
+cat("📏 Taille du jeu d'entraînement :\n")
+cat("- X_train :", dim(X_train), "\n")
+cat("- y_train :", length(y_train), "\n\n")
+
+cat("📏 Taille du jeu de test :\n")
+cat("- X_test :", dim(X_test), "\n")
+cat("- y_test :", length(y_test), "\n")
+
+
+numeric_cols <- names(X_train)[sapply(X_train, is.numeric)]
+# Créer l'objet de standardisation sur les prédicteurs numériques de X_train
+scaler <- preProcess(X_train[, numeric_cols], method = c("center", "scale"))
+
+# Appliquer la transformation sur X_train et X_test
+X_train_scaled <- X_train
+X_test_scaled <- X_test
+
+X_train_scaled[, numeric_cols] <- predict(scaler, X_train[, numeric_cols])
+X_test_scaled[, numeric_cols] <- predict(scaler, X_test[, numeric_cols])
+```
+
+
+
 
  Pour simplifier le modèle pour le rendre plus interprétable.
  
@@ -67,7 +106,7 @@ summary(poisson_model_full)
 
 
 ```{r}
-coef_df <- as.data.frame(summary(poisson_model)$coefficients)
+coef_df <- as.data.frame(summary(poisson_model_full)$coefficients)
 coef_df$Variable <- rownames(coef_df)
 ggplot(coef_df, aes(x = reorder(Variable, Estimate), y = Estimate)) +
   geom_bar(stat = "identity", fill = "steelblue") +
@@ -90,7 +129,7 @@ Vérification de la sur-dispersion (Un modèle de Poisson suppose que la moyenne
 
 ```{r}
 # Si dispersion > 1, il y a une sur-dispersion
-dispersion <- sum(residuals(poisson_model, type = "pearson")^2) / poisson_model$df.residual
+dispersion <- sum(residuals(poisson_model_full, type = "pearson")^2) / poisson_model_full$df.residual
 print(paste("Facteur de dispersion :", dispersion))
 
 if (dispersion > 1) {
@@ -146,19 +185,55 @@ Pour choisir le meilleur modèle, on compare les critères de sélection comme l
 # Comparaison des AIC pour le modèle de Poisson et le modèle binomial négatif
 AIC(poisson_model_reduced, nb_model_reduced)
 
-```
-```{r}
 # Évaluation des performances avec RMSE
-predicted_reduced <- predict(poisson_model_reduced, newdata = train_standardized, type = "response")
-rmse_reduced <- sqrt(mean((train_standardized$Claim - predicted_reduced)^2))
-print(paste("RMSE du modèle simplifié :", rmse_reduced))
+predicted_train_poisson_full <- predict(poisson_model_full, newdata = train_standardized, type = "response")
+rmse_train_poisson_full <- sqrt(mean((train_standardized$Claim - predicted_reduced)^2))
+print(paste("RMSE du modèle poisson full :", rmse_reduced))
 
 
-predicted_reduced <- predict(nb_model_reduced, newdata = train_standardized, type = "response")
+predicted_train_poisson_reduced <- predict(poisson_model_reduced, newdata = train_standardized, type = "response")
+rmse_train_poisson_reduced <- sqrt(mean((train_standardized$Claim - predicted_reduced)^2))
+print(paste("RMSE du modèle poisson réduit :", rmse_reduced))
+
+
+predicted_reduced <- predict(nb_model_full, newdata = train_standardized, type = "response")
 rmse_reduced <- sqrt(mean((train_standardized$Claim - predicted_reduced)^2))
-print(paste("RMSE du modèle réduit :", rmse_reduced))
+print(paste("RMSE du modèle full nb :", rmse_reduced))
+
+predicted_train_nb_reduced <- predict(nb_model_reduced, newdata = train_standardized, type = "response")
+rmse_train_nb_reduced <- sqrt(mean((train_standardized$Claim - predicted_reduced)^2))
+print(paste("RMSE du modèle nb réduit :", rmse_reduced))
+
 ```
 
+```{r}
+predicted_train_nb_reduced <- predict(nb_model_reduced, newdata = train_standardized, type = "response")
+rmse_train_nb_reduced <- sqrt(mean((train_standardized$Claim - predicted_reduced)^2))
+print(paste("RMSE du modèle nb réduit :", rmse_train_nb_reduced))
+
+predicted_test_nb_reduced <- predict(nb_model_reduced, newdata = test_standardized, type = "response")
+rmse_test_nb_reduced <- sqrt(mean((test_standardized$Claim - predicted_reduced)^2))
+print(paste("RMSE du modèle nb réduit :", rmse_test_nb_reduced))
+```
+
+
+```{r}
+#RMSE_C
+C_1 <- which(y %in% c(0, 1))  # Classe très fréquente
+C_2 <- which(y == 2)          # Classe fréquente
+C_3 <- which(y == 3)          # Classe rare
+C_4 <- which(y > 3)           # Classe très rare
+
+# Calcul des RMSE par classe
+rmse_1_poisson <- Metrics::rmse(y[C_1], yhat_poisson[C_1])
+rmse_2_poisson <- Metrics::rmse(y[C_2], yhat_poisson[C_2])
+rmse_3_poisson <- Metrics::rmse(y[C_3], yhat_poisson[C_3])
+rmse_4_poisson <- Metrics::rmse(y[C_4], yhat_poisson[C_4])
+
+# Calcul du RMSE_C pour le modèle Poisson
+RMSE_C_poisson <- (rmse_1_poisson + rmse_2_poisson + rmse_3_poisson + rmse_4_poisson) / 4
+print(paste("RMSE_C du modèle Poisson :", RMSE_C_poisson))
+```
 
 #Modèle Lasso
 
@@ -195,8 +270,4 @@ formula <- as.formula(paste("Claim ~", paste(significant_vars[-1], collapse = " 
 lasso_model <- glm(formula, data = train_standardized, family = poisson(link = "log"))
 
 summary(lasso_model)
-
 ```
-
-
-
