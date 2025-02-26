@@ -16,8 +16,6 @@ plot_hist_by_claim<-function(data, col){
          y = col)
   
   
-  
-  
   p2<-ggplot(data, aes(x = .data[[col]], fill = as.factor(Claim))) +
     geom_bar(position = "dodge") +
     coord_flip() +
@@ -26,8 +24,8 @@ plot_hist_by_claim<-function(data, col){
     scale_fill_brewer(palette = "Set2", name = "Nombre de sinistres")
   
   return(p1)
-  
 }
+
 
 plot_percentage <- function(data, col,precision=1) {
   library(ggplot2)
@@ -121,9 +119,6 @@ plot_claims_by_region <- function(train_data, geojson_file) {
     st_centroid() %>%
     mutate(long = st_coordinates(.)[, 1],
            lat = st_coordinates(.)[, 2])
-  
-  
-
   
   # Étape 7 : Tracer la carte
   ggplot(france_map) +
