@@ -1,0 +1,248 @@
+---
+title: "Regression model"
+author: "Ulrich Nguepkap Katchuang"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+    use_bookdown: true
+    lightbox: true
+    gallery: true
+    code_folding: hide
+    train_print: paged
+    theme: flatly
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+params:
+  region: France
+  year: 2025
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  tidy=TRUE
+)
+
+source("functions.R")
+```
+
+
+```{r data_display}
+library(rmarkdown)
+library(dplyr)
+
+
+#importation des données
+df<-read.csv('./data/train_set_clean.csv', header = T, sep = ",",dec=".")
+
+
+variables <- classifier_variables_tab(df)
+numeric_variables <- variables$variables_numeriques
+categorical_variables <- append(variables$variables_categorielles, variables$variables_binaires)
+
+
+#convertir les varianles catégorielles en factor
+df[categorical_variables] <- lapply(df[categorical_variables], factor)
+
+
+train<-df %>% dplyr::select(-Car_Age,-Age,-Age_log,-Inhab_density )
+#test<- test %>% select(-Claim)
+
+str(train)
+```
+
+
+on affiche
+```{r}
+# On vérifie
+head(train)
+str(train)
+```
+
+
+
+
+
+ ## Modelisation
+
+
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(caret)
+library(nnet)
+
+
+# Function to train models
+modele <- function(data) {
+  # Create a copy of the data to avoid modifying the original dataset
+  data_copy <- data %>% mutate(Claim_bin = ifelse(Claim > 0, 1, 0))
+
+  # Save Claim for later use
+  Claim <- data_copy$Claim
+  data_copy <- data_copy %>% dplyr::select(-Claim)
+
+  # Standardize numeric variables
+  variables <- classifier_variables_tab(data_copy)
+  numeric_variables <- variables$variables_numeriques
+  preproc <- preProcess(data_copy[, numeric_variables], method = c("center", "scale"))
+  data_copy[, numeric_variables] <- predict(preproc, data_copy[, numeric_variables])
+
+  # Train binary model
+  model_bin <- glm(Claim_bin ~ ., data = data_copy, family = binomial)
+
+  # Filter observations with claims for multinomial classification
+  data_sinistre <- data_copy %>% filter(Claim_bin == 1)
+  data_sinistre$claim <- Claim[data_copy$Claim_bin == 1]
+  data_sinistre <- data_sinistre %>% dplyr::select(-Claim_bin)
+
+  # Train multinomial model
+  model_multi <- multinom(claim ~ ., data = data_sinistre)
+
+  return(list(model_bin = model_bin, model_multi = model_multi))
+}
+
+# Function to evaluate models
+relation <- function(data) {
+  # Extract models
+  model_list <- modele(data)
+  model_bin <- model_list$model_bin
+  model_multi <- model_list$model_multi
+
+  # Create a copy of the data to avoid modifying the original dataset
+  data_copy <- data %>% mutate(Claim_bin = ifelse(Claim > 0, 1, 0))
+
+  # Standardize numeric variables
+  variables <- classifier_variables_tab(data_copy)
+  numeric_variables <- variables$variables_numeriques
+  preproc <- preProcess(data_copy[, numeric_variables], method = c("center", "scale"))
+  data_copy[, numeric_variables] <- predict(preproc, data_copy[, numeric_variables])
+
+  # Binary predictions
+  data_copy$pred_bin <- predict(model_bin, newdata = data_copy, type = "response")
+  data_copy$pred_bin_class <- ifelse(data_copy$pred_bin > 0.5, 1, 0)
+
+  # Confusion matrix for binary model
+  print("Matrice de confusion pour le modèle binaire :")
+  print(confusionMatrix(as.factor(data_copy$pred_bin_class), as.factor(data_copy$Claim_bin)))
+
+  # Filter observations with claims for multinomial classification
+  data_sinistre <- data_copy %>% filter(Claim_bin == 1)
+  data_sinistre$claim <- data$Claim[data_copy$Claim_bin == 1]
+  data_sinistre <- data_sinistre %>% dplyr::select(-Claim_bin)
+
+  # Multinomial predictions
+  data_sinistre$pred_class <- predict(model_multi, newdata = data_sinistre, type = "class")
+
+  # Confusion matrix for multinomial model
+  print("Matrice de confusion pour le modèle multinomial :")
+  print(confusionMatrix(as.factor(data_sinistre$pred_class), as.factor(data_sinistre$claim)))
+  return(data_sinistre)
+}
+
+# Execute the function on the training data
+relation(train)
+
+```
+# calcul du rmse combine
+```{r}
+# Charger les bibliothèques nécessaires
+library(caret)
+library(Metrics)
+library(dplyr)
+
+# Fonction pour entraîner les modèles et calculer le RMSE combiné
+relation <- function(data) {
+  # Extraire les modèles
+  model_list <- modele(data)
+  model_bin <- model_list$model_bin
+  model_multi <- model_list$model_multi
+
+  # Créer une copie des données
+  data_copy <- data %>% mutate(Claim_bin = ifelse(Claim > 0, 1, 0))
+
+
+
+  # Prédiction binaire (sinistre ou non)
+  data_copy$pred_bin <- predict(model_bin, newdata = data_copy, type = "response")
+  data_copy$pred_bin_class <- ifelse(data_copy$pred_bin > 0.5, 1, 0)
+
+  # Afficher la matrice de confusion pour le modèle binaire
+  print("🔹 Matrice de confusion pour le modèle binaire :")
+  print(confusionMatrix(as.factor(data_copy$pred_bin_class), as.factor(data_copy$Claim_bin)))
+
+  # Filtrer les sinistres uniquement
+  data_sinistre <- data_copy %>% filter(Claim_bin == 1)
+
+  # Ajouter la valeur réelle du sinistre
+  data_sinistre$Claim <- data$Claim[data_copy$Claim_bin == 1]
+
+  # Prédiction multinomiale du montant du sinistre
+  data_sinistre$pred_class <- predict(model_multi, newdata = data_sinistre, type = "class")
+
+  # Afficher la matrice de confusion pour le modèle multinomial
+  print("🔹 Matrice de confusion pour le modèle multinomial :")
+  print(confusionMatrix(as.factor(data_sinistre$pred_class), as.factor(data_sinistre$Claim)))
+
+  # Ajouter les prédictions multinomiales aux données complètes
+  data_copy$pred_multi <- NA  # Initialisation
+  data_copy$pred_multi[data_copy$Claim_bin == 1] <- data_sinistre$pred_class  # Attribution
+
+  # Définition des classes
+  C_1 <- which(data_sinistre$Claim %in% c(0, 1))  # Classe très fréquente
+  C_2 <- which(data_sinistre$Claim == 2)          # Classe fréquente
+  C_3 <- which(data_sinistre$Claim == 3)          # Classe rare
+  C_4 <- which(data_sinistre$Claim > 3)           # Classe très rare
+
+  # Calcul du RMSE pour chaque classe
+  rmse_1 <- ifelse(length(C_1) > 0, rmse(data_sinistre$Claim[C_1], as.numeric(data_sinistre$pred_class[C_1])), NA)
+  rmse_2 <- ifelse(length(C_2) > 0, rmse(data_sinistre$Claim[C_2], as.numeric(data_sinistre$pred_class[C_2])), NA)
+  rmse_3 <- ifelse(length(C_3) > 0, rmse(data_sinistre$Claim[C_3], as.numeric(data_sinistre$pred_class[C_3])), NA)
+  rmse_4 <- ifelse(length(C_4) > 0, rmse(data_sinistre$Claim[C_4], as.numeric(data_sinistre$pred_class[C_4])), NA)
+
+  # Calcul du RMSE combiné (moyenne des RMSE valides)
+  rmse_values <- c(rmse_1, rmse_2, rmse_3, rmse_4)
+  RMSE_C <- mean(rmse_values, na.rm = TRUE)  # Exclut les NA
+
+  # Créer le tableau des prédictions et des valeurs réelles
+  comparison_table <- data_copy %>%
+    select(Claim, Claim_bin, pred_bin_class, pred_multi)
+
+  # Retourner les résultats
+  return(list(
+    predictions = comparison_table,
+    rmse_combine = RMSE_C,
+    rmse_by_class = list(rmse_1 = rmse_1, rmse_2 = rmse_2, rmse_3 = rmse_3, rmse_4 = rmse_4)
+  ))
+}
+
+```
+
+```{r}
+# Exécuter la fonction
+resultats <- relation(train)
+
+# Afficher les prédictions et vraies valeurs
+head(resultats$predictions)
+
+# Afficher le RMSE combiné et les RMSE par classe
+cat("🔹 RMSE Combiné :", resultats$rmse_combine, "\n")
+print(resultats$rmse_by_class)
+
+```
+
+```{r}
+table(resultats$predictions$pred_multi)
+table(train$Claim)
+
+```
+

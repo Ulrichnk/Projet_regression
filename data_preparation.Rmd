@@ -56,9 +56,10 @@ library(dplyr)
 #importation des données
 train<-read.csv('./data/train_set.csv', header = T, sep = ",",dec=".")
 test<-read.csv('./data/test_set.csv', header = T, sep = ",",dec=".")
+```
 
 
-
+```{r data_display}
 #valeurs manquantes
 sum(is.na(train))
 
@@ -169,6 +170,7 @@ plot_claims_by_region(train, "./data/regions-avant-redecoupage-2015.geojson")
 ## Étude des variables numériques
 
 
+
 ### Inhab_density
 
 ```{r Inhab_density_graph}
@@ -224,25 +226,75 @@ box_plot<-function(data, col){
 
 plot_numeric(train,"Inhab_density")
 box_plot(train,"Inhab_density")
+```
+
+
+```{r Inhab_density_graph}
 print(sum(train$Inhab_density < 1))
+train$Inhab_density_log <- log(train$Inhab_density + 1)  # Ajout de 1 pour éviter log(0)
+test$Inhab_density_log <- log(test$Inhab_density + 1)  # Ajout de 1 pour éviter log(0)
 
-
+plot_numeric(train,"Inhab_density_log")
 
 
 
 ```
+### Bonus_Malus
+```{r Bonus_Malus_graph, eval=FALSE}
+plot_numeric(train,"Bonus_Malus")
+train$Bonus_Malus_log <- log(train$Bonus_Malus + 1)  # Ajout de 1 pour éviter log(0)
+test$Bonus_Malus_log <- log(test$Bonus_Malus + 1)  # Ajout de 1 pour éviter log(0)
+plot_numeric(train,"Bonus_Malus_log")
+```
+
 ### Age
 
 ```{r Age_graph}
 plot_numeric(train,"Age")
 print(sum(train$Age > 80))
+plot_hist_by_claim(train,"Age")
 
+train$Age_log <- log(train$Age+ 1)  # Ajout de 1 pour éviter log(0)
+test$Age_log <- log(test$Age + 1)  # Ajout de 1 pour éviter log(0)
+plot_numeric(train,"Age_log")
+
+
+```
+
+
+```{r Age_graph}
+summary(train$Age)
+# Ajouter une colonne de classification par âge
+train <- train %>%
+  mutate(Age_Group = case_when(
+    Age < 18  ~ "Mineur",
+    Age >= 18 & Age < 25 ~ "Jeune conducteur",
+    Age >= 25 & Age < 40 ~ "Adulte jeune",
+    Age >= 40 & Age < 60 ~ "Adulte expérimenté",
+    Age >= 60 ~ "Senior"
+  ))
+test <- test %>%
+  mutate(Age_Group = case_when(
+    Age < 18  ~ "Mineur",
+    Age >= 18 & Age < 25 ~ "Jeune conducteur",
+    Age >= 25 & Age < 40 ~ "Adulte jeune",
+    Age >= 40 & Age < 60 ~ "Adulte expérimenté",
+    Age >= 60 ~ "Senior"
+  ))
+# Afficher un aperçu
+table(train$Age_Group)
+plot_hist_by_claim(train,"Age_Group")
+plot_categorical(train,"Age_Group")
 
 ```
 ###  Car_Age
 
 ```{r Car_Age_graph}
 plot_numeric(train,"Car_Age")
+train$Car_Age_log <- log(train$Car_Age + 1)  # Ajout de 1 pour éviter log(0)
+test$Car_Age_log <- log(test$Car_Age + 1)  # Ajout de 1 pour éviter log(0)
+
+plot_numeric(train,"Car_Age_log")
 ```
 
 
@@ -257,16 +309,64 @@ plot_numeric(train,"Car_Power")
 ### Period_Exp
 
 ```{r Period_Exp_graph}
-plot_numeric(train,"Period_Exp")
+#plot_numeric(train,"Period_Exp")
+
+#train$Period_Exp_log <- log(train$Period_Exp + 1)  # Ajout de 1 pour éviter log(0)
+# Sélectionner les cas où Claim > 0 et Period_Exp > 1
+filtered_data <- train %>% filter(Claim == 0 & Period_Exp > 1)
+
+# Afficher les premières lignes
+print(head(filtered_data))
 ```
 
 
 ## Analyse de la target
+```{r}
+library(rsample)
+oversample_multiclass <- function(data, class_var = "Class") {
+  classes <- unique(data[[class_var]])
+  # Nombre maximum d'observations dans une classe
+  max_count <- max(table(data[[class_var]]))
+  # Pour chaque classe, ré-échantillonner avec remise jusqu'à atteindre max_count
+  oversampled <- lapply(classes, function(cl) {
+    subset_cl <- data[data[[class_var]] == cl, ]
+    n <- nrow(subset_cl)
+    if(n < max_count) {
+      sampled <- subset_cl[sample(1:n, size = max_count, replace = TRUE), ]
+    } else {
+      sampled <- subset_cl
+    }
+    return(sampled)
+  })
+  # Combiner les données oversamplées
+  oversampled_data <- do.call(rbind, oversampled)
+  return(oversampled_data)
+}
+set.seed(2025)
+data<-train
+### 1. Création de la variable "Class" en fonction de Claim
+data <- data %>%
+  mutate(Class = case_when(
+    Claim %in% c(0, 1) ~ "C1",  # Classe très fréquente
+    Claim == 2         ~ "C2",  # Classe fréquente
+    Claim == 3         ~ "C3",  # Classe rare
+    Claim > 3          ~ "C4"   # Classe très rare
+  ))
+oversampled_train <- oversample_multiclass(data, class_var = "Class")
+
+```
 
 ```{r target_analysis}
-source("functions.R")
+
 plot_percentage(train,"Claim",5)
+plot_percentage(oversampled_train,"Claim",5)
+#plot_numeric(train,"Inhab_density_log")
 ```
+```{r}
+plot_numeric(oversampled_train,"Inhab_density_log")
+plot_numeric(oversampled_train,"Age_log")
+```
+
 ## Analyse des corrélations
 
 Une heatmap pour visualiser les corrélations entre les variables numériques.
@@ -278,7 +378,9 @@ library(corrplot)
 # Distribution des variables numériques
 num_vars <- train[, c("Claim", "Period_Exp", "Car_Power", "Car_Age", "Age", "Inhab_density")]
 
-
+variables <- classifier_variables_tab(train)
+numeric_variables <- variables$variables_numeriques
+num_vars <- train[, numeric_variables]
 corr_matrix <- cor(num_vars)
 melted_cor <- melt(corr_matrix)
 ggplot(data = melted_cor, aes(x = Var1, y = Var2, fill = value)) +
@@ -295,7 +397,7 @@ corrplot(corr_matrix, method = "circle")
 
 
 ```
-```{r data_save, eval=FALSE}
+```{r data_save, eval=TRUE}
 # Sauvegarder l'ensemble d'entraînement
 write.csv(train, "./data/train_set_clean.csv", row.names = FALSE)
 

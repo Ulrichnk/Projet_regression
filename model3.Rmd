@@ -1,0 +1,512 @@
+---
+title: "Regression model"
+author: "Ulrich Nguepkap Katchuang"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+    use_bookdown: true
+    lightbox: true
+    gallery: true
+    code_folding: hide
+    train_print: paged
+    theme: flatly
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+params:
+  region: France
+  year: 2025
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  tidy=TRUE
+)
+
+source("functions.R")
+```
+
+
+```{r data_display}
+library(rmarkdown)
+library(dplyr)
+
+
+#importation des données
+train<-read.csv('./data/train_set_clean.csv', header = T, sep = ",",dec=".")
+test<-read.csv('./data/test_set_clean.csv', header = T, sep = ",",dec=".")
+
+
+variables <- classifier_variables_tab(train)
+numeric_variables <- variables$variables_numeriques
+categorical_variables <- append(variables$variables_categorielles, variables$variables_binaires)
+#convertir les varianles catégorielles en factor
+train[categorical_variables] <- lapply(train[categorical_variables], factor)
+test[categorical_variables] <- lapply(test[categorical_variables], factor)
+```
+
+
+on affiche
+```{r}
+# On vérifie
+head(train)
+head(test)
+str(train)
+```
+
+
+```{r}
+train<-train %>% dplyr::select(-Car_Age,-Age,-Age_log,-Inhab_density )
+#test<- test %>% select(-Claim)
+test<-test %>% dplyr::select(-Car_Age,-Age,-Age_log,-Inhab_density )
+
+str(train)
+
+```
+
+```{r}
+# Charger les bibliothèques nécessaires
+library(caret)
+
+# Transformer la variable cible en binaire (0 = Pas de sinistre, 1 = Sinistre)
+train$Claim_bin <- as.factor(ifelse(train$Claim > 0, 1, 0))
+
+
+# Vérification des proportions des classes
+table(train$Claim_bin)
+table(test$Claim_bin)
+
+train_1<- train
+
+variables <- classifier_variables_tab(train)
+numeric_variables <- variables$variables_numeriques
+categorical_variables <- append(variables$variables_categorielles, variables$variables_binaires)
+# Normalisation des variables numériques
+preproc <- preProcess(train[, numeric_variables], method = c("center", "scale"))
+train[numeric_variables] <- predict(preproc, train[numeric_variables])
+
+train$Claim<-train_1$Claim
+
+# Vérification des types de variables
+str(train)
+table(train$Claim_bin)
+head(train)
+
+```
+```{r}
+# Charger les bibliothèques nécessaires
+library(caret)
+
+# Définir le pourcentage de données pour l'entraînement (ex. 80%)
+set.seed(123)  # Pour la reproductibilité
+train_index <- createDataPartition(train$Claim_bin, p = 0.8, list = FALSE)
+
+# Séparation des données
+train_set <- train[train_index, ]
+test_set  <- train[-train_index, ]
+
+# Vérification des proportions des classes
+cat("🔹 Distribution des classes dans Train :\n")
+print(prop.table(table(train_set$Claim_bin)))
+
+cat("\n🔹 Distribution des classes dans Test :\n")
+print(prop.table(table(test_set$Claim_bin)))
+
+```
+
+```{r}
+# Charger les bibliothèques nécessaires
+data_logit<-train_set %>% select(-Claim)
+# Ajustement du modèle logistique
+logit_model <- glm(Claim_bin ~ ., data = data_logit, 
+                   family = binomial(link = "logit"))
+
+# Résumé du modèle
+summary(logit_model)
+
+```
+
+
+```{r}
+# Prédictions sur l'ensemble de test
+test_set$pred_prob <- predict(logit_model, newdata = test_set, type = "response")
+test_set$pred_class <- ifelse(test_set$pred_prob > 0.5, 1, 0)  # Seuil à 50%
+
+# Matrice de confusion
+conf_matrix <- table(Predicted = test_set$pred_class, Actual = test_set$Claim_bin)
+print(conf_matrix)
+
+# Calcul de l'accuracy
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+cat("🔹 Accuracy du modèle :", accuracy, "\n")
+
+# Tracer la courbe ROC
+library(pROC)
+roc_curve <- roc(test_set$Claim_bin, test_set$pred_prob)
+auc_value <- auc(roc_curve)
+cat("🔹 AUC du modèle :", auc_value, "\n")
+
+plot(roc_curve, col = "blue", main = "Courbe ROC - Modèle Logistique")
+
+```
+# on va oversampler
+
+
+```{r}
+# Charger la bibliothèque
+library(caret)
+
+# Effectuer l'upsampling sur les données d'entraînement
+train_balanced <- upSample(x = train_set[, -which(names(train_set) == "Claim_bin")], 
+                           y = train_set$Claim_bin, 
+                           yname = "Claim_bin")
+
+# Vérification des proportions après oversampling
+table(train_balanced$Claim_bin)
+
+
+```
+
+
+```{r}
+# Charger les bibliothèques nécessaires
+library(caret)
+train_balanced<-train_balanced %>% select(-Claim)
+
+# Réentraîner la régression logistique sur les données oversamplées
+logit_model_balanced <- glm(Claim_bin ~ ., 
+                            data = train_balanced, 
+                            family = binomial(link = "logit"))
+
+# Affichage du résumé du modèle
+summary(logit_model_balanced)
+
+```
+
+
+```{r}
+# Prédictions sur le test set
+test_set$pred_prob <- predict(logit_model_balanced, newdata = test_set, type = "response")
+
+# Convertir en classes (avec un seuil de 0.5)
+test_set$pred_class <- ifelse(test_set$pred_prob > 0.5, 1, 0)
+
+# Vérification de la matrice de confusion
+conf_matrix <- table(Predicted = test_set$pred_class, Actual = test_set$Claim_bin)
+print(conf_matrix)
+
+# Calcul de l'accuracy
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+cat("🔹 Accuracy du modèle après oversampling :", accuracy, "\n")
+
+```
+
+```{r}
+# Charger pROC pour la courbe ROC
+library(pROC)
+
+# Calcul de la courbe ROC
+roc_curve <- roc(test_set$Claim_bin, test_set$pred_prob)
+auc_value <- auc(roc_curve)
+cat("🔹 AUC du modèle après oversampling :", auc_value, "\n")
+
+# Affichage de la courbe ROC
+plot(roc_curve, col = "blue", main = "Courbe ROC - Modèle Logistique après Oversampling")
+
+```
+```{r}
+str(train_set)
+```
+
+
+### interaction non lineaire *
+```{r}
+# Charger le package glmnet
+library(glmnet)
+test<-test_set
+# Préparer les données pour glmnet
+X_train <- model.matrix(Claim_bin ~ ., data = train_balanced)[,-1]  # Matrice des features
+y_train <- as.numeric(as.character(train_balanced$Claim_bin))  # Variable cible binaire
+
+X_test <- model.matrix(Claim_bin ~ ., data = test)[,-1]
+
+# Appliquer une régression Ridge (L2)
+ridge_model <- cv.glmnet(X_train, y_train, family = "binomial", alpha = 0)  # alpha = 0 → Ridge
+ridge_lambda <- ridge_model$lambda.min  # Meilleur lambda
+
+# Prédictions sur l’ensemble de test
+ridge_pred_prob <- predict(ridge_model, newx = X_test, s = ridge_lambda, type = "response")
+ridge_pred_class <- ifelse(ridge_pred_prob > 0.5, 1, 0)
+
+# Évaluer l'AUC
+library(pROC)
+roc_curve_ridge <- roc(test$Claim_bin, ridge_pred_prob)
+auc_ridge <- auc(roc_curve_ridge)
+cat("🔹 AUC du modèle Ridge :", auc_ridge, "\n")
+
+```
+
+
+
+
+```{r}
+# Ajustement du modèle logistique initial
+logit_model_full <- glm(Claim_bin ~ ., data = train_balanced, family = binomial)
+
+# Backward Selection (AIC minimisation)
+library(MASS)
+logit_model_backward <- stepAIC(logit_model_full, direction = "backward")
+
+# Vérification des variables retenues
+summary(logit_model_backward)
+
+```
+```{r}
+# Prédictions sur l'ensemble de test
+# Prédictions sur le test set
+test_set$pred_prob <- predict(logit_model_backward, newdata = test_set, type = "response")
+
+# Convertir en classes (avec un seuil de 0.5)
+test_set$pred_class <- ifelse(test_set$pred_prob > 0.6, 1, 0)
+
+# Vérification de la matrice de confusion
+conf_matrix <- table(Predicted = test_set$pred_class, Actual = test_set$Claim_bin)
+print(conf_matrix)
+
+# Calcul de l'accuracy
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+cat("🔹 Accuracy du modèle après oversampling :", accuracy, "\n")
+```
+
+```{r}
+# Charger pROC pour la courbe ROC
+library(pROC)
+
+# Calcul de la courbe ROC
+roc_curve <- roc(test_set$Claim_bin, test_set$pred_prob)
+auc_value <- auc(roc_curve)
+cat("🔹 AUC du modèle après oversampling :", auc_value, "\n")
+
+# Affichage de la courbe ROC
+plot(roc_curve, col = "blue", main = "Courbe ROC - Modèle Logistique après Oversampling")
+
+```
+```{r}
+# Charger les bibliothèques nécessaires
+library(dplyr)
+tr <- train %>% filter(Claim_bin == 1) %>%   dplyr::select(-Claim_bin) 
+head(tr)
+dim(tr)
+```
+```{r}
+head(train)
+plot_categorical(tr, "Claim")
+table(tr$Claim)é
+```
+
+```{r}
+table(train$Claim)
+set.seed(2025)
+data<-train
+### 1. Création de la variable "Class" en fonction de Claim
+data <- data %>%
+  mutate(Class = case_when(
+    Claim %in% c(0, 1) ~ "C1",  # Classe très fréquente
+    Claim == 2         ~ "C2",  # Classe fréquente
+    Claim == 3         ~ "C3",  # Classe rare
+    Claim > 3          ~ "C4"   # Classe très rare
+  ))
+
+table(data$Class)
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+
+
+# Créer une variable binaire pour la présence d'un sinistre
+data <- data %>% mutate(Claim_bin = ifelse(Claim > 0, 1, 0))
+data<-data %>% dplyr::select(-Claim)
+
+
+
+# Définir le pourcentage de données pour l'entraînement (ex. 80%)
+set.seed(123)  # Pour la reproductibilité
+train_index <- createDataPartition(data$Claim_bin, p = 0.8, list = FALSE)
+
+# Séparation des données
+train_set <- data[train_index, ]
+test_set  <- data[-train_index, ]
+
+# Vérification des proportions des classes
+cat("🔹 Distribution des classes dans Train :\n")
+print(prop.table(table(train_set$Claim_bin)))
+
+cat("\n🔹 Distribution des classes dans Test :\n")
+print(prop.table(table(test_set$Claim_bin)))
+
+
+
+
+# Modèle logistique binaire
+model_bin <- glm(Claim_bin ~ ., data = train_set, family = binomial)
+
+# Prédictions de la probabilité d’avoir un sinistre
+train_set$pred_bin <- predict(model_bin, type = "response")
+
+# Convertir en prédiction binaire avec seuil de 0.5
+train_set$pred_bin_class <- ifelse(train_set$pred_bin > 0.5, 1, 0)
+
+# Matrice de confusion
+table(train_set$Claim_bin, train_set$pred_bin_class)
+
+```
+
+```{r}
+library(nnet)
+
+# Filtrer uniquement les individus ayant eu un sinistre (Claim > 0)
+data_sinistre <- train_set %>% filter(Claim_bin == 1)
+
+# Modèle de régression logistique multinomiale
+model_multi <- multinom(Class ~ ., data = data_sinistre)
+
+# Prédictions des classes
+data_sinistre$pred_class <- predict(model_multi, type = "class")
+
+# Matrice de confusion
+table(data_sinistre$Class, data_sinistre$pred_class)
+```
+
+
+```{r}
+library(dplyr)
+library(nnet)
+
+# Fonction pour entraîner les modèles
+modele <- function(data) {
+  # Création de la variable binaire pour savoir s'il y a un sinistre
+  data <- data %>% mutate(Claim_bin = ifelse(Claim > 0, 1, 0))
+  
+  # Sauvegarde de Claim pour les étapes suivantes
+  Claim <- data$Claim
+  data <- data %>% dplyr::select(-Claim)  # Suppression de Claim
+  
+  # Modèle binaire (logistique) pour prédire la présence de sinistre
+  model_bin <- glm(Claim_bin ~ ., data = data, family = binomial)
+  
+  # Filtrer les observations où il y a un sinistre pour la classification
+  data_sinistre <- data %>% filter(Claim_bin == 1)
+  data_sinistre$claim <- Claim[data$Claim_bin == 1]  # Restaurer Claim
+  data_sinistre <- data_sinistre %>% dplyr::select(-Claim_bin)
+  
+  # Modèle multinomial pour prédire la classe de sinistre
+  model_multi <- multinom(claim ~ ., data = data_sinistre)
+  
+  return(list(model_bin = model_bin, model_multi = model_multi))
+}
+
+# Fonction pour évaluer les modèles
+relation <- function(data) {
+  # Extraction des modèles
+  model_list <- modele(data)
+  model_bin <- model_list$model_bin
+  model_multi <- model_list$model_multi
+  
+  # Création de Claim_bin
+  data <- data %>% mutate(Claim_bin = ifelse(Claim > 0, 1, 0))
+  
+  # Prédictions binaires : sinistre ou non
+  data$pred_bin <- predict(model_bin, newdata = data, type = "response")
+  data$pred_bin_class <- ifelse(data$pred_bin > 0.5, 1, 0)
+  
+  # Matrice de confusion pour le modèle binaire
+  print("Matrice de confusion pour le modèle binaire :")
+  print(table(data$Claim_bin, data$pred_bin_class))ss
+  
+  # Sélection des sinistres pour la classification multinomiale
+  data_sinistre <- data %>% filter(Claim_bin == 1)
+  
+  # Prédictions des classes de sinistre
+  data_sinistre$pred_class <- predict(model_multi, newdata = data_sinistre, type = "class")
+  
+  # Matrice de confusion pour le modèle multinomial
+  print("Matrice de confusion pour le modèle multinomial :")
+  print(table(data_sinistre$claim, data_sinistre$pred_class))
+}
+
+# Exécution de la fonction sur les données d'entraînement
+relation(train)
+```
+```{r}
+library(MASS)
+
+# Régression de Poisson pour prédire le nombre de sinistres
+model_poisson <- glm(Claim ~ ., data = data_sinistre, family = poisson)
+
+# Si variance > moyenne, utiliser une régression binomiale négative
+#model_nb <- glm.nb(Claim ~ ., data = data_sinistre)
+
+# Prédictions du nombre de sinistres
+data_sinistre$pred_claim_poisson <- predict(model_poisson, type = "response")
+#data_sinistre$pred_claim_nb <- predict(model_nb, type = "response")
+
+# Comparaison des modèles
+mean(abs(data_sinistre$Claim - data_sinistre$pred_claim_poisson))  # Erreur Poisson
+#mean(abs(data_sinistre$Claim - data_sinistre$pred_claim_nb))        # Erreur Binomiale Négative
+
+```
+
+```{r}
+library(Metrics)
+calculate_rmse_c <- function(y_true, y_pred, classes) {
+  
+  # Liste des classes définies
+  class_labels <- unique(classes)
+  
+  # Calculer le RMSE pour chaque classe (si présente dans les données)
+  rmse_values <- sapply(class_labels, function(cl) {
+    idx <- which(classes == cl)  # Indices des observations de la classe
+    if (length(idx) > 0) {
+      return(rmse(y_true[idx], y_pred[idx]))  # Calcul du RMSE de la classe
+    } else {
+      return(NA)  # Retourne NA si la classe est absente
+    }
+  })
+  
+  # Supprimer les classes absentes (évite les biais)
+  rmse_values <- rmse_values[!is.na(rmse_values)]
+  
+  # Calcul du RMSE combiné (moyenne des RMSE de chaque classe)
+  RMSE_C <- mean(rmse_values, na.rm = TRUE)
+  
+  return(RMSE_C)
+}
+
+```
+```{r}
+# Calcul du RMSE combiné pour le modèle de Poisson
+RMSE_C_poisson <- calculate_rmse_c(data$Claim, data$pred_claim_poisson, data$Class)
+
+# Calcul du RMSE combiné pour le modèle binomial négatif
+RMSE_C_nb <- calculate_rmse_c(data$Claim, data$pred_claim_nb, data$Class)
+
+# Affichage des résultats
+cat("RMSE_C (Poisson) :", RMSE_C_poisson, "\n")
+cat("RMSE_C (Binomial Négatif) :", RMSE_C_nb, "\n")
+
+```
+
+
+
+

@@ -1,0 +1,327 @@
+---
+title: "feature_engeenering"
+author: "Ulrich Nguepkap Katchuang"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+    use_bookdown: true
+    lightbox: true
+    gallery: true
+    code_folding: hide
+    train_print: paged
+    theme: flatly
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+params:
+  region: France
+  year: 2025
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  tidy=TRUE
+)
+```
+
+
+```{r library, message=FALSE, warning=FALSE}
+source("functions.R")
+
+
+```
+
+
+# Introduction
+
+## Nettoyage des données
+
+On commence par importer le jeu de données et on vérifie si il y'a des valeurs manquantes, ce qui n'est pas le cas.
+On peut donc continuer avec l'analyse des données en vérifiant le type des variables:
+
+On va transformer bonus_malus en binaire
+et retirer les variables qui ne sont pas utiles pour la prédiction comme PoliId.
+```{r data_display}
+library(rmarkdown)
+library(dplyr)
+
+#importation des données
+train<-read.csv('./data/train_set.csv', header = T, sep = ",",dec=".")
+test<-read.csv('./data/test_set.csv', header = T, sep = ",",dec=".")
+```
+
+
+```{r data_display}
+#valeurs manquantes
+sum(is.na(train))
+
+#On va transformer bonus_malus en binaire
+#train$Bonus_Malus <- ifelse(train$Bonus_Malus < 100, "Bonus", "Malus")
+#test$Bonus_Malus <- ifelse(test$Bonus_Malus < 100, "Bonus", "Malus")
+train<-train %>% select(-PolID)
+test<-test %>% select(-PolID)
+
+#appercu des données
+paged_table(train)
+
+
+```
+
+### 📌 **Résumé des Informations sur la Voiture**
+Les variables associées aux **caractéristiques du véhicule** dans votre dataset sont :
+
+- **`Car_Power`** : Puissance du véhicule (variable continue ou ordonnée)
+- **`Car_Age`** : Âge du véhicule (variable continue)
+- **`Car_Model`** : Marque du véhicule (variable catégorielle)
+- **`Car_Fuel`** : Type de carburant (`Diesel` ou `Essence`)
+
+---
+
+### 🔹 **1. Statistiques Descriptives**
+#### **Résumé Numérique des Variables Continues**
+On commence par **résumer les variables numériques** (`Car_Power`, `Car_Age`).
+
+```{r}
+library(dplyr)
+data<-train
+# Sélection des variables voiture
+voiture_data <- data %>% select(Car_Power, Car_Age, Car_Model, Car_Fuel)
+
+# Résumé statistique des variables continues
+summary(voiture_data %>% select(Car_Power, Car_Age))
+```
+
+🔹 **Interprétation :**
+- **Moyenne (`Mean`)** : Valeur moyenne des variables `Car_Power` et `Car_Age`.
+- **Médiane (`Median`)** : Valeur centrale.
+- **Écart-type (`SD`)** : Variabilité des données.
+- **Min / Max** : Valeurs extrêmes.
+### 📌 **Interprétation des Résultats pour les Variables `Car_Power` et `Car_Age`**
+
+#### **1️⃣ Analyse de `Car_Power` (Puissance de la voiture)**
+| Statistique  | Valeur  | Interprétation |
+|-------------|--------|---------------|
+| **Min**     | 4.000  | La puissance minimale d'un véhicule est **4**. |
+| **1er Quartile (Q1)** | 5.000  | 25% des véhicules ont une puissance ≤ **5**. |
+| **Médiane (Q2 - 50%)** | 6.000  | La moitié des véhicules ont une puissance **≤ 6**. |
+| **Moyenne** | 6.454  | La puissance moyenne est d’environ **6.45** chevaux. |
+| **3e Quartile (Q3)** | 7.000  | 75% des véhicules ont une puissance ≤ **7**. |
+| **Max**     | 15.000  | La puissance maximale observée est **15**. |
+
+📌 **Observation** :
+- **Distribution concentrée** entre **5 et 7 chevaux**.
+- **Présence de quelques voitures puissantes** (jusqu'à **15 chevaux**), mais elles sont rares.
+
+---
+
+#### **2️⃣ Analyse de `Car_Age` (Âge du véhicule)**
+| Statistique  | Valeur  | Interprétation |
+|-------------|--------|---------------|
+| **Min**     | 0.000  | Certains véhicules sont **neufs** (âge 0). |
+| **1er Quartile (Q1)** | 2.000  | 25% des véhicules ont **≤ 2 ans**. |
+| **Médiane (Q2 - 50%)** | 6.000  | La moitié des voitures ont **≤ 6 ans**. |
+| **Moyenne** | 7.036  | L’âge moyen des véhicules est d’environ **7 ans**. |
+| **3e Quartile (Q3)** | 11.000  | 75% des véhicules ont **≤ 11 ans**. |
+| **Max**     | 100.000  | Une valeur anormalement élevée : probablement une **erreur ou un véhicule historique**. |
+
+📌 **Observation** :
+- **La plupart des voitures ont moins de 11 ans**.
+- **Présence de valeurs extrêmes (100 ans)** → **vérifier s’il s’agit d’erreurs ou de véhicules spéciaux (collection, camions, etc.).**
+
+---
+
+### 📊 **3️⃣ Visualisation des Distributions**
+#### 🔹 **Histogramme de `Car_Power`**
+```{r}
+library(ggplot2)
+ggplot(voiture_data, aes(x = Car_Power)) +
+  geom_histogram(bins = 20, fill = "blue", alpha = 0.7) +
+  labs(title = "Distribution de la Puissance des Voitures", x = "Puissance", y = "Fréquence")
+```
+
+#### 🔹 **Histogramme de `Car_Age`**
+```{r}
+ggplot(voiture_data, aes(x = Car_Age)) +
+  geom_histogram(bins = 20, fill = "red", alpha = 0.7) +
+  labs(title = "Distribution de l'Âge des Voitures", x = "Âge", y = "Fréquence")
+```
+
+#### 🔹 **Boîte à Moustaches pour Identifier les Outliers**
+```{r}
+ggplot(voiture_data, aes(y = Car_Age)) +
+  geom_boxplot(fill = "orange", alpha = 0.7) +
+  labs(title = "Analyse des Outliers sur l'Âge des Voitures", y = "Âge du véhicule")
+```
+
+---
+
+### 🔍 **4️⃣ Vérification des Corrélations**
+Pour voir si **l'âge du véhicule influence sa puissance** :
+
+```{r}
+cor(voiture_data$Car_Age, voiture_data$Car_Power, use = "complete.obs")
+```
+
+🔹 **Si la corrélation est négative** → **Les voitures récentes sont plus puissantes.**  
+🔹 **Si la corrélation est proche de 0** → **Pas de relation significative.**
+
+---
+
+### ✅ **Conclusion**
+- **Les voitures ont en moyenne 7 ans**, mais **certaines valeurs aberrantes** (100 ans) doivent être examinées.
+- **La puissance moyenne est de 6.45 chevaux**, et **peu de véhicules dépassent 7 chevaux**.
+- **Des analyses supplémentaires** peuvent être faites pour détecter des **groupes de véhicules** :
+  - **Voitures neuves vs anciennes**
+  - **Voitures puissantes vs économiques**
+  - **Lien entre puissance et âge**
+  
+💡 **Prochaine étape : Analyser les modèles et le type de carburant pour mieux comprendre le parc automobile. 🚗📊**
+
+
+
+#### OUtliers
+```{r}
+# Calcul des limites pour identifier les outliers
+Q1 <- quantile(data$Car_Age, 0.25, na.rm = TRUE)
+Q3 <- quantile(data$Car_Age, 0.75, na.rm = TRUE)
+IQR <- Q3 - Q1  # Intervalle interquartile
+
+# Définition des bornes
+lower_bound <- Q1 - 1.5 * IQR
+upper_bound <- Q3 + 1.5 * IQR
+
+# Afficher les bornes
+cat("Borne inférieure :", lower_bound, "\n")
+cat("Borne supérieure :", upper_bound, "\n")
+
+# Identifier les outliers
+outliers <- data[data$Car_Age < lower_bound | data$Car_Age > upper_bound, ]
+print(outliers)
+print(data[data$Car_Age > 95,])
+```
+```{r}
+data$Car_Age_log <- log(data$Car_Age + 1)  # Ajout de 1 pour éviter log(0)
+ggplot(data, aes(x = Car_Age_log)) +
+  geom_histogram(bins = 20, fill = "blue", alpha = 0.7) +
+  labs(title = "Distribution de l'Âge des Voitures (Transformation Log)", x = "Log(Âge)", y = "Fréquence")
+cor(data$Car_Age_log, data$Claim, use = "complete.obs")
+
+```
+```{r}
+cor(data %>% filter(Car_Age < 80) %>% pull(Car_Age_log), data %>% filter(Car_Age < 80) %>% pull(Claim))
+data <- data %>%
+  mutate(Age_Car_Group = case_when(
+    Car_Age < 5  ~ "Très récent",
+    Car_Age >= 5 & Car_Age < 10 ~ "Récent",
+    Car_Age >= 10 & Car_Age < 20 ~ "Moyennement ancien",
+    Car_Age >= 20 ~ "Ancien"
+  ))
+test <- test %>%
+  mutate(Age_Car_Group = case_when(
+    Car_Age < 5  ~ "Très récent",
+    Car_Age >= 5 & Car_Age < 10 ~ "Récent",
+    Car_Age >= 10 & Car_Age < 20 ~ "Moyennement ancien",
+    Car_Age >= 20 ~ "Ancien"
+  ))
+
+table(data$Age_Car_Group, data$Claim)  # Voir la répartition
+
+```
+
+```{r}
+# Créer un tableau de contingence
+table_age_claim <- table(data$Age_Car_Group, data$Claim)
+
+# Test du Chi-2
+chisq.test(table_age_claim)
+
+```
+```{r}
+modele <- glm(Claim ~ Age_Car_Group + Car_Power + Car_Model+ Car_Fuel+Bonus_Malus, data = data, family = poisson)
+summary(modele)
+
+```
+```{r}
+# Prédiction sur les données de test
+# Appliquer la fonction d'évaluation sur le modèle MARS
+result_mars_op <- evaluate_model_rmse_combine(modele, data, test)
+
+# Afficher les résultats
+print(result_mars_op$RMSE_C_train)  # RMSE combiné sur train
+print(result_mars_op$RMSE_C_test)   # RMSE combiné sur test
+```
+
+
+
+
+---
+
+### 🔹 **2. Analyse des Variables Catégorielles (`Car_Model`, `Car_Fuel`)**
+Les variables `Car_Model` et `Car_Fuel` sont **catégorielles**. On peut compter leur **fréquence**.
+
+```{r}
+# Fréquence des modèles de voitures
+table(voiture_data$Car_Model)
+
+# Fréquence des types de carburant
+table(voiture_data$Car_Fuel)
+```
+
+**Autre option : regrouper et afficher un résumé des proportions**
+```{r}
+prop.table(table(voiture_data$Car_Fuel)) * 100  # Pourcentage de chaque type de carburant
+```
+
+📊 **Interprétation :**
+- La **distribution des modèles de voiture** montre les marques les plus courantes.
+- La **répartition du type de carburant** permet de voir si `Diesel` ou `Essence` domine.
+
+---
+
+### 🔹 **3. Visualisation des Variables**
+#### **Histogrammes pour `Car_Power` et `Car_Age`**
+```{r}
+library(ggplot2)
+
+# Histogramme de la puissance des voitures
+ggplot(voiture_data, aes(x = Car_Power)) +
+  geom_histogram(bins = 20, fill = "blue", alpha = 0.7) +
+  labs(title = "Distribution de la Puissance des Voitures", x = "Car Power", y = "Fréquence")
+
+# Histogramme de l'âge des voitures
+ggplot(voiture_data, aes(x = Car_Age)) +
+  geom_histogram(bins = 20, fill = "red", alpha = 0.7) +
+  labs(title = "Distribution de l'Âge des Voitures", x = "Car Age", y = "Fréquence")
+```
+
+---
+
+### 🔹 **4. Corrélations entre les Variables de la Voiture**
+Si vous souhaitez voir comment l'âge et la puissance des véhicules sont **corrélés**, utilisez :
+
+```{r}
+cor(voiture_data$Car_Power, voiture_data$Car_Age, use = "complete.obs")
+```
+
+📊 **Si la corrélation est négative**, cela signifie que les **voitures plus récentes** ont tendance à être **plus puissantes**.
+
+---
+
+### ✅ **Résumé Final**
+- **Variables continues (`Car_Power`, `Car_Age`)** :
+  - Moyenne, médiane, min/max, écart-type.
+  - Visualisation par histogrammes.
+- **Variables catégorielles (`Car_Model`, `Car_Fuel`)** :
+  - Tableaux de fréquences.
+  - Visualisation en barplot.
+- **Corrélation entre l'âge et la puissance du véhicule**.
+
+💡 **Cette analyse permet d'extraire des informations clés sur le parc automobile couvert par l'assurance ! 🚗📊**

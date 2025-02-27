@@ -243,3 +243,29 @@ classifier_variables <- function(data_set) {
   
 }
 
+
+### 4. Oversampling multiclasses personnalisé sur l'ensemble d'entraînement
+# Fonction d'oversampling pour équilibrer chaque classe au nombre d'observations maximum
+oversample_multiclass <- function(data, class_var = "Class") {
+  library(rsample)     # Pour la séparation train/test
+  library(dplyr)       # Pour la manipulation des données
+  library(Metrics)     # Pour calculer RMSE et MAE
+  library(MASS)        # Pour d'autres modèles si besoin
+  classes <- unique(data[[class_var]])
+  # Nombre maximum d'observations dans une classe
+  max_count <- max(table(data[[class_var]]))
+  # Pour chaque classe, ré-échantillonner avec remise jusqu'à atteindre max_count
+  oversampled <- lapply(classes, function(cl) {
+    subset_cl <- data[data[[class_var]] == cl, ]
+    n <- nrow(subset_cl)
+    if(n < max_count) {
+      sampled <- subset_cl[sample(1:n, size = max_count, replace = TRUE), ]
+    } else {
+      sampled <- subset_cl
+    }
+    return(sampled)
+  })
+  # Combiner les données oversamplées
+  oversampled_data <- do.call(rbind, oversampled)
+  return(oversampled_data)
+}

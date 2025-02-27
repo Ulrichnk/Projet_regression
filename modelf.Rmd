@@ -1,0 +1,486 @@
+---
+title: "Regression model"
+author: "Ulrich Nguepkap Katchuang"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+    use_bookdown: true
+    lightbox: true
+    gallery: true
+    code_folding: hide
+    train_print: paged
+    theme: flatly
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+params:
+  region: France
+  year: 2025
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  tidy=TRUE
+)
+
+source("functions.R")
+```
+
+
+```{r data_display}
+library(rmarkdown)
+library(dplyr)
+
+
+#importation des données
+df<-read.csv('./data/train_set_clean.csv', header = T, sep = ",",dec=".")
+
+
+variables <- classifier_variables_tab(df)
+numeric_variables <- variables$variables_numeriques
+categorical_variables <- append(variables$variables_categorielles, variables$variables_binaires)
+
+
+#convertir les varianles catégorielles en factor
+df[categorical_variables] <- lapply(df[categorical_variables], factor)
+
+
+train<-df %>% dplyr::select(-Car_Age,-Age,-Age_log,-Inhab_density )
+#test<- test %>% select(-Claim)
+
+str(train)
+```
+
+
+
+
+standardiser les variables numériques et créer un modèle de régression de poisson.
+
+
+
+
+```{r}
+# Ajuster un modèle de Poisson complet sur l'ensemble d'entraînement
+modele_poisson <- glm(Claim ~ ., data = train_set, family = poisson)
+
+# Réaliser la sélection en arrière en minimisant l'AIC
+modele_poisson_backward <- step(modele_poisson, direction = "backward", trace = TRUE)
+
+# Afficher le résumé du modèle final
+summary(modele_poisson_backward)
+
+```
+```{r}
+# Charger les packages nécessaires
+library(rsample)
+library(Metrics)
+library(dplyr)
+
+# 4. Calcul des prédictions sur train et test
+train_pred <- predict(modele_poisson_backward, newdata = train_set, type = "response")
+test_pred  <- predict(modele_poisson_backward, newdata = test_set, type = "response")
+
+# 5. Calcul des métriques globales
+rmse_train <- rmse(train_set$Claim, train_pred)
+mae_train  <- mae(train_set$Claim, train_pred)
+
+rmse_test  <- rmse(test_set$Claim, test_pred)
+mae_test   <- mae(test_set$Claim, test_pred)
+# Pour le jeu d'entraînement
+C1_train <- which(train_set$Claim %in% c(0, 1))
+C2_train <- which(train_set$Claim == 2)
+C3_train <- which(train_set$Claim == 3)
+C4_train <- which(train_set$Claim > 3)
+
+rmse_1_train <- if(length(C1_train) > 0) rmse(train_set$Claim[C1_train], train_pred[C1_train]) else NA
+rmse_2_train <- if(length(C2_train) > 0) rmse(train_set$Claim[C2_train], train_pred[C2_train]) else NA
+rmse_3_train <- if(length(C3_train) > 0) rmse(train_set$Claim[C3_train], train_pred[C3_train]) else NA
+rmse_4_train <- if(length(C4_train) > 0) rmse(train_set$Claim[C4_train], train_pred[C4_train]) else NA
+
+rmse_train_list <- c(rmse_1_train, rmse_2_train, rmse_3_train, rmse_4_train)
+rmse_train_list <- rmse_train_list[!is.na(rmse_train_list)]
+RMSE_C_train <- mean(rmse_train_list)
+
+# Pour le jeu de test
+C1_test <- which(test_set$Claim %in% c(0, 1))
+C2_test <- which(test_set$Claim == 2)
+C3_test <- which(test_set$Claim == 3)
+C4_test <- which(test_set$Claim > 3)
+
+rmse_1_test <- if(length(C1_test) > 0) rmse(test_set$Claim[C1_test], test_pred[C1_test]) else NA
+rmse_2_test <- if(length(C2_test) > 0) rmse(test_set$Claim[C2_test], test_pred[C2_test]) else NA
+rmse_3_test <- if(length(C3_test) > 0) rmse(test_set$Claim[C3_test], test_pred[C3_test]) else NA
+rmse_4_test <- if(length(C4_test) > 0) rmse(test_set$Claim[C4_test], test_pred[C4_test]) else NA
+
+rmse_test_list <- c(rmse_1_test, rmse_2_test, rmse_3_test, rmse_4_test)
+rmse_test_list <- rmse_test_list[!is.na(rmse_test_list)]
+RMSE_C_test <- mean(rmse_test_list)
+
+# 7. Affichage des résultats
+cat("🔹 MÉTRIQUES SUR L'ENSEMBLE D'ENTRAÎNEMENT\n")
+cat("RMSE Global:", rmse_train, "\n")
+cat("MAE Global:", mae_train, "\n")
+cat("RMSE Combiné (RMSE_C_train):", RMSE_C_train, "\n\n")
+
+cat("🔹 MÉTRIQUES SUR L'ENSEMBLE DE TEST\n")
+cat("RMSE Global:", rmse_test, "\n")
+cat("MAE Global:", mae_test, "\n")
+cat("RMSE Combiné (RMSE_C_test):", RMSE_C_test, "\n")
+print(test_pred)
+```
+
+```{r}
+# Chargement des packages nécessaires
+library(rsample)     # Pour la séparation train/test
+library(dplyr)       # Pour la manipulation des données
+library(Metrics)     # Pour calculer RMSE et MAE
+library(MASS)        # Pour d'autres modèles si besoin
+
+set.seed(2025)
+data<-train
+### 1. Création de la variable "Class" en fonction de Claim
+data <- data %>%
+  mutate(Class = case_when(
+    Claim %in% c(0, 1) ~ "C1",  # Classe très fréquente
+    Claim == 2         ~ "C2",  # Classe fréquente
+    Claim == 3         ~ "C3",  # Classe rare
+    Claim > 3          ~ "C4"   # Classe très rare
+  ))
+
+### 2. Séparation des données en train (70%) et test (30%) stratifiée sur "Class"
+splits <- initial_split(data, prop = 0.7, strata = Class)
+train_set <- training(splits)
+test_set  <- testing(splits)
+
+### 3. Standardisation des variables numériques (hors variables cibles et catégorielles)
+# On exclut ici la variable cible et les variables catégorielles
+standardize_train <- function(train_data, target, exclude = c("Bonus_Malus", "Car_Model", "Car_Fuel", "Urban_rural_class", "French_region", "Class")) {
+  numeric_cols <- sapply(train_data, is.numeric)
+  exclude_cols <- c(target, exclude)
+  numeric_cols[names(train_data) %in% exclude_cols] <- FALSE
+  
+  train_means <- colMeans(train_data[, numeric_cols], na.rm = TRUE)
+  train_sds   <- apply(train_data[, numeric_cols], 2, sd, na.rm = TRUE)
+  
+  train_data_std <- train_data
+  train_data_std[, numeric_cols] <- scale(train_data[, numeric_cols], center = train_means, scale = train_sds)
+  
+  return(list(train_data = train_data_std, means = train_means, sds = train_sds))
+}
+
+standardize_test <- function(test_data, target, train_means, train_sds, exclude = c("Bonus_Malus", "Car_Model", "Car_Fuel", "Urban_rural_class", "French_region", "Class")){
+  numeric_cols <- sapply(test_data, is.numeric)
+  exclude_cols <- c(target, exclude)
+  numeric_cols[names(test_data) %in% exclude_cols] <- FALSE
+  
+  test_data_std <- test_data
+  test_data_std[, numeric_cols] <- scale(test_data[, numeric_cols], center = train_means, scale = train_sds)
+  
+  return(test_data_std)
+}
+
+std_train <- standardize_train(train_set, target = "Claim")
+train_std <- std_train$train_data
+train_means <- std_train$means
+train_sds <- std_train$sds
+
+test_std <- standardize_test(test_set, target = "Claim", train_means, train_sds)
+
+### 4. Oversampling multiclasses personnalisé sur l'ensemble d'entraînement
+# Fonction d'oversampling pour équilibrer chaque classe au nombre d'observations maximum
+oversample_multiclass <- function(data, class_var = "Class") {
+  classes <- unique(data[[class_var]])
+  # Nombre maximum d'observations dans une classe
+  max_count <- max(table(data[[class_var]]))
+  # Pour chaque classe, ré-échantillonner avec remise jusqu'à atteindre max_count
+  oversampled <- lapply(classes, function(cl) {
+    subset_cl <- data[data[[class_var]] == cl, ]
+    n <- nrow(subset_cl)
+    if(n < max_count) {
+      sampled <- subset_cl[sample(1:n, size = max_count, replace = TRUE), ]
+    } else {
+      sampled <- subset_cl
+    }
+    return(sampled)
+  })
+  # Combiner les données oversamplées
+  oversampled_data <- do.call(rbind, oversampled)
+  return(oversampled_data)
+}
+
+cat("Répartition initiale (train) :\n")
+print(table(train_std$Class))
+
+oversampled_train <- oversample_multiclass(train_std, class_var = "Class")
+
+cat("Répartition après oversampling :\n")
+print(table(oversampled_train$Class))
+
+# Pour la modélisation, retirer la variable "Class"
+model_train <- oversampled_train[, -which(names(oversampled_train) == "Class")]
+
+#model_train <- oversampled_train %>% select(-Class)
+
+### 5. Ajustement du modèle de Poisson avec sélection backward (AIC)
+# Modèle complet sur le jeu d'entraînement oversamplé
+poisson_model <- glm(Claim ~ ., data = model_train, family = poisson)
+
+# Sélection backward basée sur l'AIC
+poisson_model_backward <- step(poisson_model, direction = "backward", trace = FALSE)
+cat("\nRésumé du modèle (backward) :\n")
+print(summary(poisson_model_backward))
+
+### 6. Prédictions sur les ensembles d'entraînement et de test
+# Ici, pour l'évaluation, nous utilisons les données originales standardisées (avant oversampling)
+train_pred <- predict(poisson_model_backward, newdata = train_std, type = "response")
+test_pred  <- predict(poisson_model_backward, newdata = test_std, type = "response")
+```
+
+
+```{r}
+
+test_pred<-round(test_pred)
+### 7. Calcul des métriques globales et du RMSE combiné par classe
+# Métriques globales
+rmse_train_global <- rmse(train_set$Claim, train_pred)
+mae_train_global  <- mae(train_set$Claim, train_pred)
+rmse_test_global  <- rmse(test_set$Claim, test_pred)
+mae_test_global   <- mae(test_set$Claim, test_pred)
+
+# Définir les classes pour l'évaluation (basées sur la variable Claim originale)
+# C1 : Claim = 0 ou 1, C2 : Claim = 2, C3 : Claim = 3, C4 : Claim > 3
+# Pour l'ensemble d'entraînement :
+C1_train <- which(train_set$Claim %in% c(0, 1))
+C2_train <- which(train_set$Claim == 2)
+C3_train <- which(train_set$Claim == 3)
+C4_train <- which(train_set$Claim > 3)
+
+rmse_C1_train <- if(length(C1_train) > 0) rmse(train_set$Claim[C1_train], train_pred[C1_train]) else NA
+rmse_C2_train <- if(length(C2_train) > 0) rmse(train_set$Claim[C2_train], train_pred[C2_train]) else NA
+rmse_C3_train <- if(length(C3_train) > 0) rmse(train_set$Claim[C3_train], train_pred[C3_train]) else NA
+rmse_C4_train <- if(length(C4_train) > 0) rmse(train_set$Claim[C4_train], train_pred[C4_train]) else NA
+
+rmse_train_by_class <- c(rmse_C1_train, rmse_C2_train, rmse_C3_train, rmse_C4_train)
+rmse_train_by_class <- rmse_train_by_class[!is.na(rmse_train_by_class)]
+RMSE_C_train <- mean(rmse_train_by_class)
+
+# Pour l'ensemble de test :
+C1_test <- which(test_set$Claim %in% c(0, 1))
+C2_test <- which(test_set$Claim == 2)
+C3_test <- which(test_set$Claim == 3)
+C4_test <- which(test_set$Claim > 3)
+
+rmse_C1_test <- if(length(C1_test) > 0) rmse(test_set$Claim[C1_test], test_pred[C1_test]) else NA
+rmse_C2_test <- if(length(C2_test) > 0) rmse(test_set$Claim[C2_test], test_pred[C2_test]) else NA
+rmse_C3_test <- if(length(C3_test) > 0) rmse(test_set$Claim[C3_test], test_pred[C3_test]) else NA
+rmse_C4_test <- if(length(C4_test) > 0) rmse(test_set$Claim[C4_test], test_pred[C4_test]) else NA
+
+rmse_test_by_class <- c(rmse_C1_test, rmse_C2_test, rmse_C3_test, rmse_C4_test)
+rmse_test_by_class <- rmse_test_by_class[!is.na(rmse_test_by_class)]
+RMSE_C_test <- mean(rmse_test_by_class)
+
+### 8. Affichage des résultats
+cat("\n🔹 MÉTRIQUES SUR L'ENSEMBLE D'ENTRAÎNEMENT\n")
+cat("RMSE Global:", rmse_train_global, "\n")
+cat("MAE Global:", mae_train_global, "\n")
+cat("RMSE Combiné (RMSE_C_train):", RMSE_C_train, "\n\n")
+
+cat("🔹 MÉTRIQUES SUR L'ENSEMBLE DE TEST\n")
+cat("RMSE Global:", rmse_test_global, "\n")
+cat("MAE Global:", mae_test_global, "\n")
+cat("RMSE Combiné (RMSE_C_test):", RMSE_C_test, "\n")
+print(table(round(test_pred)))
+print(table(test_set$Claim))
+```
+```{r}
+# Charger le package nécessaire pour les métriques
+library(Metrics)
+
+# Fonction pour calculer le RMSE Combiné
+evaluate_model_rmse_combine <- function(model, train_set, test_set) {
+  
+  # Prédictions sur train et test
+  train_pred <- predict(model, newdata = train_set, type = "response")
+  test_pred  <- predict(model, newdata = test_set, type = "response")
+  
+  # Fonction interne pour calculer le RMSE par classe
+  compute_rmse_per_class <- function(actual, predicted) {
+    classes <- list(
+      C1 = which(actual %in% c(0, 1)),  # Classe très fréquente
+      C2 = which(actual == 2),          # Classe fréquente
+      C3 = which(actual == 3),          # Classe rare
+      C4 = which(actual > 3)            # Classe très rare
+    )
+    
+    rmse_values <- sapply(classes, function(idx) {
+      if (length(idx) > 0) {
+        return(rmse(actual[idx], predicted[idx]))
+      } else {
+        return(NA)
+      }
+    })
+    
+    # Calculer le RMSE combiné comme la moyenne des RMSE des classes non NA
+    rmse_values <- rmse_values[!is.na(rmse_values)]
+    RMSE_C <- mean(rmse_values)
+    
+    return(list(rmse_by_class = rmse_values, RMSE_C = RMSE_C))
+  }
+  
+  # Calcul du RMSE combiné pour train et test
+  train_rmse_result <- compute_rmse_per_class(train_set$Claim, train_pred)
+  test_rmse_result  <- compute_rmse_per_class(test_set$Claim, test_pred)
+  
+  # Affichage des résultats
+  cat("\n🔹 MÉTRIQUES SUR L'ENSEMBLE D'ENTRAÎNEMENT\n")
+  cat("RMSE Global:", rmse(train_set$Claim, train_pred), "\n")
+  cat("MAE Global:", mae(train_set$Claim, train_pred), "\n")
+  cat("RMSE Combiné (RMSE_C_train):", train_rmse_result$RMSE_C, "\n")
+  
+  cat("\n🔹 MÉTRIQUES SUR L'ENSEMBLE DE TEST\n")
+  cat("RMSE Global:", rmse(test_set$Claim, test_pred), "\n")
+  cat("MAE Global:", mae(test_set$Claim, test_pred), "\n")
+  cat("RMSE Combiné (RMSE_C_test):", test_rmse_result$RMSE_C, "\n")
+  
+  return(list(
+    RMSE_C_train = train_rmse_result$RMSE_C,
+    RMSE_C_test = test_rmse_result$RMSE_C,
+    rmse_train_by_class = train_rmse_result$rmse_by_class,
+    rmse_test_by_class = test_rmse_result$rmse_by_class
+  ))
+}
+
+```
+
+```{r}
+library(nnet)
+modele_multinom <- multinom(Claim ~ ., data = train)
+predictions <- predict(modele_multinom, train, type = "class")
+print(predictions)
+print(round(predictions))
+```
+```{r}
+table(predictions)
+```
+
+
+```{r}
+library(earth)  # Pour MARS
+library(Metrics)  # Pour les métriques d'évaluation
+# Ajustement du modèle MARS sur l'ensemble d'entraînement
+mars_model <- earth(Claim ~ ., data = model_train)
+
+# Afficher un résumé du modèle
+summary(mars_model)
+# Appliquer la fonction d'évaluation sur le modèle MARS
+result_mars <- evaluate_model_rmse_combine(mars_model, model_train, test_set)
+
+# Afficher les résultats
+print(result_mars$RMSE_C_train)  # RMSE combiné sur train
+print(result_mars$RMSE_C_test)   # RMSE combiné sur test
+mars_model_optimized <- earth(Claim ~ ., data = train_set, degree = 2, nprune = 20)
+result_mars_optimized <- evaluate_model_rmse_combine(mars_model_optimized, train_set, test_set)
+
+```
+```{r}
+# Appliquer la fonction d'évaluation sur le modèle MARS
+result_mars_op <- evaluate_model_rmse_combine(mars_model_optimized, train_set, test_set)
+
+# Afficher les résultats
+print(result_mars_op$RMSE_C_train)  # RMSE combiné sur train
+print(result_mars_op$RMSE_C_test)   # RMSE combiné sur test
+```
+
+```{r}
+modele_multinom <- multinom(Claim ~ ., data = model_train)
+predictions <- predict(modele_multinom, model_train, type = "class")
+table(predictions)
+```
+
+shsh
+```{r}
+# Charger les bibliothèques nécessaires
+library(Metrics)
+
+# Fonction pour calculer le RMSE Combiné
+evaluate_model_rmse_combine <- function(model, train_set, test_set, type = "response") {
+  
+  # Prédictions sur train et test
+  train_pred <- predict(model, newdata = train_set, type = "class")
+  test_pred  <- predict(model, newdata = test_set, type = "class")
+  
+  # Fonction interne pour calculer le RMSE par classe
+  compute_rmse_per_class <- function(actual, predicted) {
+    classes <- list(
+      C1 = which(actual %in% c(0, 1)),  # Classe très fréquente
+      C2 = which(actual == 2),          # Classe fréquente
+      C3 = which(actual == 3),          # Classe rare
+      C4 = which(actual > 3)            # Classe très rare
+    )
+    
+    rmse_values <- sapply(classes, function(idx) {
+      if (length(idx) > 0) {
+        return(rmse(actual[idx], predicted[idx]))
+      } else {
+        return(NA)  # Retourne NA si la classe est absente
+      }
+    })
+    
+    # Exclure les classes avec NA (aucun exemple)
+    rmse_values <- rmse_values[!is.na(rmse_values)]
+    
+    # Calcul du RMSE combiné
+    RMSE_C <- ifelse(length(rmse_values) > 0, mean(rmse_values), NA)
+    
+    return(list(rmse_by_class = rmse_values, RMSE_C = RMSE_C))
+  }
+  
+  # Calcul du RMSE combiné pour train et test
+  train_rmse_result <- compute_rmse_per_class(train_set$Claim, train_pred)
+  test_rmse_result  <- compute_rmse_per_class(test_set$Claim, test_pred)
+  
+  # Affichage des résultats
+  cat("\n🔹 MÉTRIQUES SUR L'ENSEMBLE D'ENTRAÎNEMENT\n")
+  cat("RMSE Global:", rmse(train_set$Claim, train_pred), "\n")
+  cat("MAE Global:", mae(train_set$Claim, train_pred), "\n")
+  cat("RMSE Combiné (RMSE_C_train):", train_rmse_result$RMSE_C, "\n")
+  cat("Détails par classe (Train) :", train_rmse_result$rmse_by_class, "\n")
+  
+  cat("\n🔹 MÉTRIQUES SUR L'ENSEMBLE DE TEST\n")
+  cat("RMSE Global:", rmse(test_set$Claim, test_pred), "\n")
+  cat("MAE Global:", mae(test_set$Claim, test_pred), "\n")
+  cat("RMSE Combiné (RMSE_C_test):", test_rmse_result$RMSE_C, "\n")
+  cat("Détails par classe (Test) :", test_rmse_result$rmse_by_class, "\n")
+  
+  return(list(
+    RMSE_C_train = train_rmse_result$RMSE_C,
+    RMSE_C_test = test_rmse_result$RMSE_C,
+    rmse_train_by_class = train_rmse_result$rmse_by_class,
+    rmse_test_by_class = test_rmse_result$rmse_by_class
+  ))
+}
+
+```
+
+
+```{r}
+result_mars_op <- evaluate_model_rmse_combine(modele_multinom, train_set, test_set, type="class")
+
+# Afficher les résultats
+print(result_mars_op$RMSE_C_train)  # RMSE combiné sur train
+print(result_mars_op$RMSE_C_test)   # RMSE combiné sur test
+predictions <- predict(modele_multinom, test_set, type = "class")
+table(predictions)
+
+```
+
+
+
