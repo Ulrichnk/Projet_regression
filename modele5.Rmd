@@ -60,12 +60,7 @@ str(train)
 ```
 
 
-on affiche
-```{r}
-# On vérifie
-head(train)
-str(train)
-```
+
 
 
 
@@ -74,8 +69,8 @@ str(train)
  ## Modelisation
 
 
-
-```{r}
+fonction pour le modele
+```{r modele 1}
 # Load necessary libraries
 library(dplyr)
 library(caret)
@@ -105,7 +100,7 @@ modele <- function(data) {
   # 🔹 **2. Oversampling pour le modèle binaire**
   if (sum(data_copy$Claim_bin == 1) < sum(data_copy$Claim_bin == 0)  & a==1) {
     data_copy <- caret::upSample(
-      x = data_copy %>% select(-Claim_bin),
+      x = data_copy %>% dplyr::select(-Claim_bin),
       y = data_copy$Claim_bin,
       yname = "Claim_bin"
     )
@@ -151,7 +146,96 @@ modele <- function(data) {
 
   return(list(model_bin = model_bin, model_multi = model_multi))
 }
+```
 
+
+second modele 
+
+```{r modele 2}
+# Charger les bibliothèques nécessaires
+library(dplyr)
+library(caret)
+
+# Fonction pour entraîner les modèles avec oversampling
+modele <- function(data) {
+  set.seed(123)  # Fixer un seed pour la reproductibilité
+
+  # Créer une copie des données pour éviter de modifier l'original
+  data_copy <- data %>% mutate(Claim_bin = as.factor(ifelse(Claim > 0, 1, 0)))
+
+  # Sauvegarder la variable Claim pour plus tard
+  Claim <- data_copy$Claim
+  data_copy <- data_copy %>% dplyr::select(-Claim)
+
+  # 🔹 **1. Standardiser les variables numériques**
+  d <- data_copy %>% select(-Claim_bin)
+  numeric_variables <- names(d)[sapply(d, is.numeric)]  # Trouver les variables numériques
+
+  if (length(numeric_variables) > 0) {
+    preproc <- preProcess(data_copy[, numeric_variables], method = c("center", "scale"))
+    data_copy[, numeric_variables] <- predict(preproc, data_copy[, numeric_variables])
+  }
+
+  # 🔹 **2. Oversampling pour équilibrer `Claim_bin` (sinistre ou non)**
+  if (sum(data_copy$Claim_bin == 1) < sum(data_copy$Claim_bin == 0)) {
+    data_copy <- caret::upSample(
+      x = data_copy %>% select(-Claim_bin),
+      y = data_copy$Claim_bin,
+      yname = "Claim_bin"
+    )
+  }
+
+  # Vérifier la distribution des classes après oversampling
+  print("🔹 Distribution des classes après oversampling binaire :")
+  print(table(data_copy$Claim_bin))
+
+  # 🔹 **3. Entraînement du modèle binaire (logistique)**
+  model_bin <- glm(Claim_bin ~ ., data = data_copy, family = binomial)
+
+  # Filtrer les observations avec sinistres pour la régression de Poisson
+  data_sinistre <- data_copy %>% filter(Claim_bin == 1)
+
+  # Restaurer `Claim` pour les observations avec sinistres
+  data_sinistre$Claim <- Claim[data_copy$Claim_bin == 1]
+
+  # Supprimer la variable `Claim_bin` (inutile pour la régression de Poisson)
+  data_sinistre <- data_sinistre %>% dplyr::select(-Claim_bin)
+
+  # 🔹 **4. Oversampling pour le modèle de Poisson**
+  classes_minoritaire <- data_sinistre %>%
+    group_by(Claim) %>%
+    summarise(count = n()) %>%
+    filter(count < 500)  # Seuil de rééquilibrage
+
+  if (nrow(classes_minoritaire) > 0) {
+    for (classe in classes_minoritaire$Claim) {
+      data_ajout <- data_sinistre %>% filter(Claim == classe)
+      n_ajout <- max(500 - nrow(data_ajout), 0)
+      if (n_ajout > 0) {
+        data_sinistre <- rbind(data_sinistre, data_ajout[sample(1:nrow(data_ajout), n_ajout, replace = TRUE), ])
+      }
+    }
+  }
+
+  # Vérification de la distribution après oversampling
+  print("🔹 Distribution des classes après oversampling Poisson :")
+  print(table(data_sinistre$Claim))
+
+  # 🔹 **5. Entraînement du modèle de Poisson**
+  model_poisson <- glm(Claim ~ ., data = data_sinistre, family = poisson)
+
+  return(list(model_bin = model_bin, model_poisson = model_poisson))
+}
+
+```
+
+
+
+
+
+fonciton pour relation
+
+```{r relation}
 # Fonction pour évaluer les modèles
 relation <- function(data) {
   # Extraire les modèles
@@ -161,7 +245,8 @@ relation <- function(data) {
 
   # Créer une copie des données pour éviter de modifier l'original
   data_copy <- data %>% mutate(Claim_bin = ifelse(Claim > 0, 1, 0))
-
+  
+  print("🔹 Matrice de confusion pour le modèle binaire :")
   # 🔹 **1. Standardiser les variables numériques**
   variables <- classifier_variables_tab(data_copy)
   numeric_variables <- variables$variables_numeriques
@@ -193,7 +278,10 @@ relation <- function(data) {
 
 # 🔹 **Exécuter l'évaluation**
 resultats <- relation(train)
+```
 
+
+```{r relation}
 # Vérifier les prédictions finales
 head(resultats)
 

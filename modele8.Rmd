@@ -1,0 +1,477 @@
+---
+title: "Regression model"
+author: "Ulrich Nguepkap Katchuang"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+    use_bookdown: true
+    lightbox: true
+    gallery: true
+    code_folding: hide
+    train_print: paged
+    theme: flatly
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+params:
+  region: France
+  year: 2025
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r rmse_combines}
+# Charger la bibliothèque nécessaire
+library(Metrics)
+
+# Fonction pour calculer le RMSE combiné
+rmse_combine <- function(y_true, y_pred) {
+  # 🔹 Définition des classes de sinistres
+  C1 <- which(y_true %in% c(0, 1))  # Classe très fréquente
+  C2 <- which(y_true == 2)          # Classe fréquente
+  C3 <- which(y_true == 3)          # Classe rare
+  C4 <- which(y_true >= 4)          # Classe très rare
+
+  # 🔹 Calcul du RMSE par classe (uniquement si la classe est présente)
+  rmse_1 <- if (length(C1) > 0) rmse(y_true[C1], y_pred[C1]) else NA
+  rmse_2 <- if (length(C2) > 0) rmse(y_true[C2], y_pred[C2]) else NA
+  rmse_3 <- if (length(C3) > 0) rmse(y_true[C3], y_pred[C3]) else NA
+  rmse_4 <- if (length(C4) > 0) rmse(y_true[C4], y_pred[C4]) else NA
+
+  # 🔹 Calcul du RMSE combiné en prenant la moyenne des valeurs non NA
+  rmse_values <- c(rmse_1, rmse_2, rmse_3, rmse_4)
+  RMSE_C <- mean(rmse_values, na.rm = TRUE)  # Moyenne des RMSE valides
+
+  # 🔹 Affichage des résultats
+  print(paste("RMSE C1 :", round(rmse_1, 4)))
+  print(paste("RMSE C2 :", round(rmse_2, 4)))
+  print(paste("RMSE C3 :", round(rmse_3, 4)))
+  print(paste("RMSE C4 :", round(rmse_4, 4)))
+  print(paste("RMSE Combiné (RMSE_C) :", round(RMSE_C, 4)))
+
+  return(RMSE_C)
+}
+
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  tidy=TRUE
+)
+
+source("functions.R")
+```
+
+
+
+```{r data_display}
+library(rmarkdown)
+library(dplyr)
+
+
+#importation des données
+df<-read.csv('./data/train_set_clean.csv', header = T, sep = ",",dec=".")
+
+
+variables <- classifier_variables_tab(df)
+numeric_variables <- variables$variables_numeriques
+categorical_variables <- append(variables$variables_categorielles, variables$variables_binaires)
+
+
+#convertir les varianles catégorielles en factor
+df[categorical_variables] <- lapply(df[categorical_variables], factor)
+```
+
+
+```{r data_display}
+#train<-df %>% dplyr::select(-Car_Age,-Age,-Age_log,-Inhab_density )
+#test<- test %>% select(-Claim)
+train<-df %>% dplyr::select(-Car_Age,-Age,-Inhab_density , Age_Group)
+
+
+str(train)
+```
+
+
+
+on affiche
+```{r}
+
+
+train$Exposure<-as.numeric(train$Claim/train$Period_Exp)
+
+train$Exposure_log<-log(train$Exposure+1)
+train<-train %>% dplyr::select(-Exposure, -Claim, -Period_Exp)
+train$Exposure<-train$Exposure_log
+
+train<-train %>% dplyr::select(-Exposure_log)
+```
+
+
+
+
+ ## Modelisation
+ 
+
+ 
+
+
+```{r}
+# Charger la bibliothèque nécessaire
+library(caret)
+
+# Fixer un seed pour la reproductibilité
+set.seed(2025)
+
+# Copie du dataset
+data <- train
+
+# 🔹 **Partitionner les données en 70% train et 30% test**
+index <- caret::createDataPartition(data$Exposure, p = 0.7, list = FALSE)
+train_final <- data[index, ]   # 70% des données pour l'entraînement
+test_final  <- data[-index, ]  # 30% des données pour le test
+
+# 🔹 **Séparer la variable cible et les prédicteurs**
+target_variable <- "Exposure"
+predictor_variables <- setdiff(names(train_final), target_variable)
+
+# 🔹 **Standardisation des variables explicatives uniquement**
+preprocess_params <- preProcess(train_final[, predictor_variables], method = c("center", "scale"))
+
+# Appliquer la transformation aux variables explicatives
+train_final_scaled <- train_final
+test_final_scaled  <- test_final
+
+train_final_scaled[, predictor_variables] <- predict(preprocess_params, train_final[, predictor_variables])
+test_final_scaled[, predictor_variables]  <- predict(preprocess_params, test_final[, predictor_variables])
+
+# 🔹 **Vérification des tailles**
+cat("✅ Taille du train :", nrow(train_final_scaled), "\n")
+cat("✅ Taille du test :", nrow(test_final_scaled), "\n")
+
+# 🔹 **Vérification des statistiques après standardisation (hors cible)**
+summary(train_final_scaled[, predictor_variables])
+
+
+```
+
+ 
+```{r}
+train_data <- train_final_scaled
+test_data <- test_final_scaled
+```
+
+
+```{r}
+# Entraînement du modèle
+lm_model <- lm(Exposure ~ ., data = train_data)
+
+# Résumé du modèle
+summary(lm_model)
+
+# Prédiction sur l’ensemble de test
+predictions_lm <- predict(lm_model, newdata = test_data)
+
+# Évaluation du modèle
+rmse_lm <- sqrt(mean((predictions_lm - test_data$Exposure)^2))
+cat("RMSE Régression Linéaire :", rmse_lm, "\n")
+
+```
+```{r}
+# Prédiction et retour à l’échelle d’origine
+predictions_log <- exp(predict(lm_model, newdata = test_data))
+rmse_log <- sqrt(mean((predictions_log - test_data$Exposure)^2))
+cat("RMSE Régression Log :", rmse_log, "\n")
+```
+
+"## Selection de variables"
+```{r stepwise}
+library(MASS)
+lm_model_stepwise <- stepAIC(lm_model, direction = "both", steps=10)
+# Prédiction sur l’ensemble de test
+predictions_lm_stepwise <- predict(lm_model_stepwise, newdata = test_data)
+
+# Évaluation du modèle
+rmse_lm <- sqrt(mean((predictions_lm_stepwise - test_data$Exposure)^2))
+cat("RMSE Régression Linéaire :", rmse_lm, "\n")
+summary(lm_model_stepwise)
+
+```
+```{r}
+# Prédiction et retour à l’échelle d’origine
+predictions_log <- exp(predict(lm_model_stepwise, newdata = test_data))
+rmse_log <- sqrt(mean((predictions_log - test_data$Exposure)^2))
+cat("RMSE Régression Log :", rmse_log, "\n")
+
+```
+
+
+
+
+
+
+
+
+
+# Mars
+
+```{r}
+library(earth)
+# Entraînement du modèle MARS
+mars_model <- earth(Exposure ~ ., data = train_data %>% dplyr::select(-zero_indicator))
+
+# Résumé du modèle
+summary(mars_model)
+
+# Importance des variables
+evimp(mars_model)
+# Prédiction sur l’ensemble de test
+# Prédiction sur l’ensemble de test
+predictions_mars <- predict(mars_model, newdata = test_data)
+
+# Calcul du RMSE (Root Mean Squared Error)
+rmse_mars <- sqrt(mean((predictions_mars - test_data$Exposure)^2))
+
+# Calcul du R²
+r2_mars <- cor(predictions_mars, test_data$Exposure)^2
+
+# Affichage des résultats
+cat("RMSE MARS :", rmse_mars, "\n")
+cat("R² MARS :", r2_mars, "\n")
+
+```
+
+
+# zip
+
+```{r}
+# Ajouter une variable binaire pour identifier les zéros
+train_data$zero_indicator <- ifelse(train_data$Exposure == 0, 1, 0)
+test_data$zero_indicator <- ifelse(test_data$Exposure == 0, 1, 0)
+```
+
+sampling
+```{r}
+library(ROSE)
+
+# Appliquer ROSE pour équilibrer la présence des `0` et `>0`
+train_data_balanced <- ROSE(zero_indicator ~ ., data = train_data, seed = 2025)$data
+
+# Vérifier la distribution après ROSE
+table(train_data_balanced$zero_indicator)
+
+```
+
+
+```{r}
+# Modèle logistique pour prédire la probabilité d'avoir Exposure > 0
+logit_model <- glm(zero_indicator ~ ., data = train_data_balanced%>%dplyr::select(-Car_Power,-Car_Age_log), family = binomial)
+
+# Prédiction sur le test
+prob_zero <- predict(logit_model, newdata = test_data, type = "response")
+
+# Affichage des performances du modèle logistique
+summary(logit_model)
+# Vérifier l'AUC pour mesurer la qualité du modèle
+library(pROC)
+roc_curve <- roc(test_data$zero_indicator, prob_zero)
+auc(roc_curve)
+plot(roc_curve, main = paste("Courbe ROC - AUC :", round(auc(roc_curve), 3)))
+
+```
+```{r}
+str(train_data_balanced)
+str(test_data)
+```
+
+lasso
+```{r lasso}
+library(glmnet)
+
+# Conversion des données en matrices (sans la cible)
+X_train <- model.matrix(zero_indicator ~ ., data = train_data_balanced)[, -1]
+y_train <- train_data_balanced$zero_indicator
+
+X_test <- model.matrix(zero_indicator ~ ., data = test_data%>%dplyr::select(-Exposure))[, -1]
+y_test <- test_data$zero_indicator
+```
+
+
+```{r lasso}
+# Ajustement du modèle Lasso
+lasso_model <- cv.glmnet(X_train, y_train, family = "binomial", alpha = 1)
+
+# Sélection des variables importantes
+coef(lasso_model, s = "lambda.min")
+```
+
+
+```{r lasso}
+dim(X_test)
+str(X_train)
+dim(X_train)
+# Prédictions et AUC
+prob_lasso <- predict(lasso_model, newx = X_test, s = "lambda.min", type = "response")
+roc_lasso <- roc(y_test, prob_lasso)
+auc_lasso <- auc(roc_lasso)
+
+cat("AUC Régression Lasso :", auc_lasso, "\n")
+
+```
+
+
+interraction polynomiale
+```{r}
+library(car)
+
+# Calculer le Variance Inflation Factor (VIF)
+vif_values <- vif(logit_model_interact)
+
+# Afficher les variables avec un VIF élevé (>5)
+print(vif_values[vif_values > 5])
+
+```
+
+```{r}
+# Ajouter des interactions entre variables avec la bonne syntaxe
+logit_model_interact <- glm(zero_indicator ~ 
+                            I(Bonus_Malus)+ 
+                            I(Car_Age_log^2) + 
+                            French_region + 
+                            Car_Model:Age_log +
+                            Inhab_density_log:French_region ,
+                            data = train_data_balanced, 
+                            family = binomial)
+
+# Vérification des résultats
+summary(logit_model_interact)
+
+# Prédictions et AUC
+prob_interact <- predict(logit_model_interact, newdata = test_data, type = "response")
+roc_interact <- roc(test_data$zero_indicator, prob_interact)
+auc_interact <- auc(roc_interact)
+
+cat("AUC avec interactions :", auc_interact, "\n")
+
+```
+
+```{r}
+# Filtrer les données pour garder uniquement les valeurs positives
+train_data_positive <- train_data %>% filter(Exposure > 0) %>% dplyr::select(-zero_indicator)
+test_data_positive <- test_data %>% filter(Exposure > 0) %>% dplyr::select(-zero_indicator)
+
+```
+
+
+
+
+```{r}
+# Modèle de Poisson pour prédire les valeurs strictement positives de Exposure
+lm_model <- lm(Exposure ~ ., data = train_data_positive)
+
+# Prédiction sur les données positives
+pred_lm <- predict(lm_model, newdata = test_data_positive)
+
+# Affichage des performances du modèle Poisson
+summary(lm_model)
+```
+
+
+```{r}
+# Évaluation du modèle
+rmse_lm <- sqrt(mean((pred_lm - test_data_positive$Exposure)^2))
+cat("RMSE Régression Linéaire :", rmse_lm, "\n")
+
+# Prédiction et retour à l’échelle d’origine
+predictions_log <- exp(pred_lm)
+rmse_log <- sqrt(mean((predictions_log - test_data_positive$Exposure)^2))
+cat("RMSE Régression Log :", rmse_log, "\n")
+
+```
+# est ce que poisson adapte:
+
+```{r}
+# Vérifier la moyenne et la variance de Exposure
+mean(train_data_positive$Exposure)
+var(train_data_positive$Exposure)
+
+# Vérifier l'histogramme
+hist(train_data_positive$Exposure, breaks = 30, col = "blue", main = "Distribution de Exposure")
+
+```
+```{r}
+
+
+
+gamma_model <- glm(Exposure ~ ., data = train_data_positive, family = Gamma(link = "log"))
+
+# Prédiction sur les données positives du test
+pred_gamma <- predict(gamma_model, newdata = test_data_positive, type = "response")
+
+# Affichage des performances du modèle
+summary(gamma_model)
+
+```
+
+```{r poisson simlple}
+# Filtrer les données pour garder uniquement les valeurs strictement positives de Exposure
+train_data_positive <- train_data %>% filter(Exposure > 0) %>% dplyr:: select(-zero_indicator)
+test_data_positive  <- test_data %>% filter(Exposure > 0) %>% dplyr::select(-zero_indicator)
+
+# Modèle de Poisson pour prédire l'intensité de Exposure
+poisson_model <- glm(Exposure ~ ., data = train_data_positive, family = poisson)
+
+# Prédiction sur les données positives
+pred_poisson <- predict(poisson_model, newdata = test_data_positive, type = "response")
+
+# Affichage des performances du modèle Poisson
+summary(poisson_model)
+
+```
+
+
+```{r}
+# Prédictions finales : 
+# Si probabilité d'être 0 > 0.5, on prédit 0, sinon on utilise la prédiction de Poisson
+final_predictions <- ifelse(prob_zero > 0.4, 0, pred_poisson)
+
+# Évaluation du modèle
+rmse_final <- sqrt(mean((final_predictions - test_data$Exposure)^2, na.rm = TRUE))
+cat("RMSE Final (Zéro-Inflaté) :", rmse_final, "\n")
+
+```
+```{r}
+# Prédiction et retour à l’échelle d’origine
+predictions_log <- exp(final_predictions)-1
+rmse_log <- sqrt(mean((predictions_log - test_data$Exposure)^2))
+cat("RMSE Régression Log :", rmse_log, "\n")
+```
+
+```{r}
+#rint(predictions_log)
+table(as.factor(predictions_log))
+
+#pred <- (Prediction_Ajustee = predictions_log * df$Period_Exp)
+
+```
+
+```{r}
+#print(pred)
+table(as.factor(round(pred)))
+```
+```{r}
+table(as.factor(round(df$Claim)))
+
+```
+```{r}
+# Prédiction et retour à l’échelle d’origine
+rmse_combine(y_true = df$Claim, y_pred = pred)
+```
+
+

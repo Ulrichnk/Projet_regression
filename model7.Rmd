@@ -1,0 +1,443 @@
+---
+title: "Regression model"
+author: "Ulrich Nguepkap Katchuang"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+    use_bookdown: true
+    lightbox: true
+    gallery: true
+    code_folding: hide
+    train_print: paged
+    theme: flatly
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+params:
+  region: France
+  year: 2025
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  tidy=TRUE
+)
+
+source("functions.R")
+```
+
+```{r}
+df_1<-read.csv('./archive/freMTPL2freq.csv', header = T, sep = ",",dec=".")
+table(df_1$ClaimNb)
+```
+
+```{r data_display}
+library(rmarkdown)
+library(dplyr)
+
+
+#importation des données
+df<-read.csv('./data/train_set_clean.csv', header = T, sep = ",",dec=".")
+
+
+variables <- classifier_variables_tab(df)
+numeric_variables <- variables$variables_numeriques
+categorical_variables <- append(variables$variables_categorielles, variables$variables_binaires)
+
+
+#convertir les varianles catégorielles en factor
+df[categorical_variables] <- lapply(df[categorical_variables], factor)
+
+
+train<-df %>% dplyr::select(-Car_Age,-Age,-Age_log,-Inhab_density, -Car_Model )
+#test<- test %>% select(-Claim)
+
+table(train$Claim)
+```
+
+
+
+
+
+
+
+
+
+
+
+ ## Modelisation
+
+
+fonction pour le modele
+```{r modele 1}
+# Load necessary libraries
+library(dplyr)
+library(caret)
+library(nnet)
+
+# Fonction pour entraîner les modèles avec oversampling
+modele <- function(data) {
+ 
+  set.seed(2025)  # Fixer un seed pour la reproductibilité
+
+  # 🔹 **1. Création des variables binaires pour les étapes conditionnelles**
+  data_copy <- data %>%
+    mutate(
+      Claim_bin = as.factor(ifelse(Claim > 0, 1, 0)),   # 0 = pas de sinistre, 1 = sinistre
+      Claim_1_plus = as.factor(ifelse(Claim > 1, 1, 0)), # 0 = 1 sinistre, 1 = plus de 1
+      Claim_2_plus = as.factor(ifelse(Claim > 2, 1, 0))  # 0 = 2 sinistres, 1 = plus de 2
+    )
+
+  # Sauvegarde de Claim
+  
+  
+
+    #data_copy <- data_copy %>% dplyr::select(-Claim)
+  data_copy$Claim <- as.factor(data_copy$Claim)
+
+  #data_balanced_bin <- ROSE(Claim_bin ~ ., data = data_copy, seed = 2025)$data
+  #data_copy<-data_balanced_bin
+# 🔹 **3. Modèle 1 : Prédiction sinistre ou non**
+  model_bin <- glm(Claim_bin ~ ., data = data_copy%>%dplyr::select(-Claim_1_plus, -Claim_2_plus, -Claim), family = binomial)
+# 🔹 **4. Sélection des données pour le modèle 2 (seulement les sinistrés)**
+  data_sinistre <- data_copy %>% filter(Claim_bin == 1) %>% dplyr::select(-Claim_bin)
+  table(data_sinistre$Claim_2_plus)
+# Modèle 2 : Un sinistre (1) ou plusieurs (>1)
+  model_1_plus <- glm(Claim_1_plus ~ ., data = data_sinistre%>%dplyr::select(-Claim_2_plus,-Claim), family = binomial)
+# 🔹 **5. Sélection des données pour le modèle 3 (ceux avec plus de 1 sinistre)**
+  data_1_plus <- data_sinistre %>% filter(Claim_1_plus == 1) %>% dplyr::select(-Claim_1_plus)
+# Modèle 3 : Deux sinistres (2) ou plus (>2)
+  model_2_plus <- glm(Claim_2_plus ~ ., data = data_1_plus%>% dplyr::select(-Claim), family = binomial)
+# 🔹 **6. Sélection des données pour le modèle de Poisson (ceux avec plus de 2 sinistres)**
+  data_2_plus <- data_1_plus %>% filter(Claim_2_plus == 1) %>% dplyr::select(-Claim_2_plus)
+# Modèle 4 : Régression de Poisson pour prédire `Claim`
+  data_2_plus$Claim <- as.numeric(data_2_plus$Claim)
+  data_2_plus$Claim <- as.integer(data_2_plus$Claim)
+  model_poisson <- glm(Claim ~ ., data = data_2_plus, family=poisson)
+  
+  return(list(model_bin = model_bin,model_1_plus=model_1_plus, model_2_plus=model_2_plus, model_poisson = model_poisson))
+}
+```
+
+
+
+```{r response}
+predict_claims <- function(models, data,
+                           threshold_bin = 0.5,
+                           threshold_1_plus = 0.5,
+                           threshold_2_plus = 0.5) {
+  # Prédiction du modèle binaire sur l'ensemble des données
+  prob_bin <- predict(models$model_bin, newdata = data, type = "response")
+  pred_bin <- ifelse(prob_bin > threshold_bin, 1, 0)
+  
+  # Initialisation des prédictions finales
+  final_pred <- numeric(nrow(data))
+  
+  # Pour les observations sans sinistre prédit (pred_bin == 0)
+  final_pred[pred_bin == 0] <- 0
+  
+  # Pour les observations avec sinistre prédit (pred_bin == 1)
+  ind_bin <- which(pred_bin == 1)
+  if (length(ind_bin) > 0) {
+    # Prédiction en bloc avec le modèle "1_plus"
+    prob_1_plus <- predict(models$model_1_plus, newdata = data[ind_bin, , drop = FALSE], type = "response")
+    pred_1_plus <- ifelse(prob_1_plus > threshold_1_plus, 1, 0)
+    
+    # Si le modèle "1_plus" prédit 0 : exactement 1 sinistre
+    ind_1 <- ind_bin[pred_1_plus == 0]
+    final_pred[ind_1] <- 1
+    
+    # Sinon, pour les cas où "1_plus" prédit 1
+    ind_1_plus <- ind_bin[pred_1_plus == 1]
+    if (length(ind_1_plus) > 0) {
+      # Prédiction en bloc avec le modèle "2_plus"
+      prob_2_plus <- predict(models$model_2_plus, newdata = data[ind_1_plus, , drop = FALSE], type = "response")
+      pred_2_plus <- ifelse(prob_2_plus > threshold_2_plus, 1, 0)
+      
+      # Si "2_plus" prédit 0 : exactement 2 sinistres
+      ind_2 <- ind_1_plus[pred_2_plus == 0]
+      final_pred[ind_2] <- 2
+      
+      # Sinon, pour les cas où "2_plus" prédit 1 : utilisation du modèle de Poisson
+      ind_poisson <- ind_1_plus[pred_2_plus == 1]
+      if (length(ind_poisson) > 0) {
+        pred_poisson <- predict(models$model_poisson, newdata = data[ind_poisson, , drop = FALSE], type = "response")
+        final_pred[ind_poisson] <- round(pred_poisson)
+      }
+    }
+  }
+  
+  return(final_pred)
+}
+
+```
+
+
+
+sampling
+
+```{r sampling}
+# Charger la bibliothèque nécessaire
+library(caret)
+
+# Fixer un seed pour la reproductibilité
+set.seed(2025)
+
+# Copie du dataset
+data <- train
+
+# 🔹 **Partitionner les données en 80% train et 20% test**
+index <- createDataPartition(data$Claim, p = 0.8, list = FALSE)
+train_final <- data[index, ]   # 80% des données pour le train
+test_final  <- data[-index, ]  # 20% des données pour le test
+
+# 🔹 **Vérification des tailles**
+cat("✅ Taille du train :", nrow(train_final), "\n")
+cat("✅ Taille du test :", nrow(test_final), "\n")
+
+# 🔹 **Distribution des sinistres**
+cat("\n📊 Distribution des sinistres dans le TRAIN :\n")
+print(table(train_final$Claim))
+
+cat("\n📊 Distribution des sinistres dans le TEST :\n")
+print(table(test_final$Claim))
+
+```
+
+```{r}
+# Chargement du package ROSE
+library(ROSE)
+set.seed(2025)
+data<-train
+### 1. Création de la variable "Class" en fonction de Claim
+data <- data %>%
+  mutate(Class = case_when(
+    Claim %in% c(0, 1) ~ "C1",  # Classe très fréquente
+    Claim == 2         ~ "C2",  # Classe fréquente
+    Claim == 3         ~ "C3",  # Classe rare
+    Claim > 3          ~ "C4"   # Classe très rare
+  ))
+# Fonction d'oversampling pour équilibrer chaque classe au nombre d'observations maximum
+# Chargement des packages nécessaires
+library(dplyr)
+# library(ROSE) # Le package ROSE est chargé ici si vous souhaitez expérimenter des techniques synthétiques.
+
+set.seed(2025)
+
+# Création de la variable "Class" en fonction de "Claim"
+data <- train %>%
+  mutate(Class = case_when(
+    Claim %in% c(0, 1) ~ "C1",  # Classe très fréquente
+    Claim == 2         ~ "C2",  # Classe fréquente
+    Claim == 3         ~ "C3",  # Classe rare
+    Claim > 3          ~ "C4"   # Classe très rare
+  ))
+
+# Fonction de rééchantillonnage équilibré
+# Permet de définir la taille totale souhaitée de l'échantillon final (target_total)
+resample_multiclass <- function(data, class_var = "Class", target_total = 60000) {
+  classes <- unique(data[[class_var]])
+  n_classes <- length(classes)
+  # Calcul du nombre cible par classe
+  target_per_class <- floor(target_total / n_classes)
+  
+  balanced_data <- lapply(classes, function(cl) {
+    subset_cl <- data[data[[class_var]] == cl, ]
+    n <- nrow(subset_cl)
+    if(n < target_per_class) {
+      # Oversampling : ré-échantillonnage avec remise
+      sampled <- subset_cl[sample(1:n, size = target_per_class, replace = TRUE), ]
+    } else if(n > target_per_class) {
+      # Sous-échantillonnage : ré-échantillonnage sans remise
+      sampled <- subset_cl[sample(1:n, size = target_per_class, replace = FALSE), ]
+    } else {
+      sampled <- subset_cl
+    }
+    return(sampled)
+  })
+  
+  # Combinaison des échantillons par classe
+  balanced_data <- do.call(rbind, balanced_data)
+  return(balanced_data)
+}
+
+# Application du rééchantillonnage équilibré
+train_balanced <- resample_multiclass(data, target_total = 60000)
+
+# Visualisation de la distribution de la variable "Class"
+print(table(train_balanced$Class))
+# Application de l'oversampling pour équilibrer les classes.
+# Ici, on demande à obtenir un échantillon total de taille "N" (par exemple, 60000 observations),
+# mais vous pouvez ajuster N selon vos besoins.
+train_over <-oversample_multiclass(data)
+
+# Visualisation de la nouvelle distribution
+table(train_over$Claim)
+```
+
+
+```{r}
+# Entraînement des modèles
+models <- modele(train)
+```
+
+
+
+```{r}
+# Prédictions sur le jeu de test
+y_pred <- predict_claims(models, test_final, threshold_bin = 0.3, threshold_1_plus = 0.2, threshold_2_plus = 0.1)
+```
+
+
+```{r}
+table(y_pred)
+table(test_final$Claim)
+```
+
+```{r rmse_combines}
+# Charger la bibliothèque nécessaire
+library(Metrics)
+
+# Fonction pour calculer le RMSE combiné
+rmse_combine <- function(y_true, y_pred) {
+  # 🔹 Définition des classes de sinistres
+  C1 <- which(y_true %in% c(0, 1))  # Classe très fréquente
+  C2 <- which(y_true == 2)          # Classe fréquente
+  C3 <- which(y_true == 3)          # Classe rare
+  C4 <- which(y_true >= 4)          # Classe très rare
+
+  # 🔹 Calcul du RMSE par classe (uniquement si la classe est présente)
+  rmse_1 <- if (length(C1) > 0) rmse(y_true[C1], y_pred[C1]) else NA
+  rmse_2 <- if (length(C2) > 0) rmse(y_true[C2], y_pred[C2]) else NA
+  rmse_3 <- if (length(C3) > 0) rmse(y_true[C3], y_pred[C3]) else NA
+  rmse_4 <- if (length(C4) > 0) rmse(y_true[C4], y_pred[C4]) else NA
+
+  # 🔹 Calcul du RMSE combiné en prenant la moyenne des valeurs non NA
+  rmse_values <- c(rmse_1, rmse_2, rmse_3, rmse_4)
+  RMSE_C <- mean(rmse_values, na.rm = TRUE)  # Moyenne des RMSE valides
+
+  # 🔹 Affichage des résultats
+  print(paste("RMSE C1 :", round(rmse_1, 4)))
+  print(paste("RMSE C2 :", round(rmse_2, 4)))
+  print(paste("RMSE C3 :", round(rmse_3, 4)))
+  print(paste("RMSE C4 :", round(rmse_4, 4)))
+  print(paste("RMSE Combiné (RMSE_C) :", round(RMSE_C, 4)))
+
+  return(RMSE_C)
+}
+
+```
+
+```{r}
+t=c(0.3,0.2,0.1)
+t=c(0.05, 0.2, 0.1) #1.5
+t=c(0.03, 0.2, 0.03) #1.4
+t=c(0.02, 0.2, 0.03) #1.3
+y_pred <- predict_claims(models, test_final, threshold_bin = 0.02, threshold_1_plus = 0.2, threshold_2_plus = 0.03)
+table(y_pred)
+y_true <- test_final$Claim  # Valeurs réelles
+# Calcul du RMSE combiné
+rmse_c_result <- rmse_combine(y_true, y_pred)
+```
+
+
+
+
+
+```{r}
+
+y_true <- train_final$Claim  # Valeurs réelles
+y_pred <- predict_claims(models, train_final, threshold_bin = 0.05, threshold_1_plus = 0.2, threshold_2_plus = 0.1)
+rmse_c_result <- rmse_combine(y_true, y_pred)
+
+
+```
+```{r eval=FALSE}
+# Chargement des bibliothèques nécessaires
+library(Metrics)
+library(dplyr)
+
+# Fonction pour calculer le RMSE combiné par classe
+rmse_combine <- function(y_true, y_pred) {
+  # Définition des indices par classe
+  C1 <- which(y_true %in% c(0, 1))  # Classe très fréquente
+  C2 <- which(y_true == 2)          # Classe fréquente
+  C3 <- which(y_true == 3)          # Classe rare
+  C4 <- which(y_true >= 4)          # Classe très rare
+  
+  # Calcul du RMSE par classe (si la classe est présente)
+  rmse_1 <- if (length(C1) > 0) rmse(y_true[C1], y_pred[C1]) else NA
+  rmse_2 <- if (length(C2) > 0) rmse(y_true[C2], y_pred[C2]) else NA
+  rmse_3 <- if (length(C3) > 0) rmse(y_true[C3], y_pred[C3]) else NA
+  rmse_4 <- if (length(C4) > 0) rmse(y_true[C4], y_pred[C4]) else NA
+  
+  # Calcul du RMSE combiné : moyenne des RMSE non-NA
+  rmse_values <- c(rmse_1, rmse_2, rmse_3, rmse_4)
+  RMSE_C <- mean(rmse_values, na.rm = TRUE)
+  
+  # Affichage des résultats par classe
+  cat("RMSE C1 :", round(rmse_1, 4), "\n")
+  cat("RMSE C2 :", round(rmse_2, 4), "\n")
+  cat("RMSE C3 :", round(rmse_3, 4), "\n")
+  cat("RMSE C4 :", round(rmse_4, 4), "\n")
+  cat("RMSE Combiné (RMSE_C) :", round(RMSE_C, 4), "\n")
+  
+  return(RMSE_C)
+}
+
+# Fonction objectif pour l'optimisation des seuils
+objective_thresholds <- function(thresholds, models, test_final) {
+  # Extraction des seuils
+  threshold_bin    <- thresholds[1]
+  threshold_1_plus <- thresholds[2]
+  threshold_2_plus <- thresholds[3]
+  
+  # Prédiction avec les seuils fournis
+  y_pred <- predict_claims(models, test_final, 
+                           threshold_bin = threshold_bin, 
+                           threshold_1_plus = threshold_1_plus, 
+                           threshold_2_plus = threshold_2_plus)
+  
+  # Calcul du RMSE combiné
+  rmse_value <- rmse_combine(test_final$Claim, y_pred)
+  return(rmse_value)
+}
+
+# Paramètres initiaux pour les seuils
+#init_thresholds <- c(0.2, 0.2, 0.1)
+#init_thresholds <- c(0.1, 0.3, 0.1)
+init_thresholds <- c(0.05, 0.2, 0.1)
+# Optimisation des seuils en utilisant la méthode "L-BFGS-B" pour respecter les bornes [0,1]
+opt_result <- optim(par = init_thresholds, 
+                    fn = objective_thresholds, 
+                    models = models, 
+                    test_final = test_final,
+                    method = "L-BFGS-B", 
+                    lower = rep(0, 3), 
+                    upper = rep(1, 3),
+                    control = list(fnscale = 1))  # On minimise
+
+# Affichage des résultats de l'optimisation
+cat("Thresholds optimaux :\n")
+cat("threshold_bin    =", round(opt_result$par[1], 4), "\n")
+cat("threshold_1_plus =", round(opt_result$par[2], 4), "\n")
+cat("threshold_2_plus =", round(opt_result$par[3], 4), "\n")
+cat("RMSE combiné minimal :", round(opt_result$value, 4), "\n")
+
+```
+
+```{r}
+summary(models$model_bin)
+```
+
+
+
+

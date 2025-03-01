@@ -1,0 +1,1335 @@
+---
+title: "Rapport expert: Prédiction du nombre de sinistres pour assurance responsabilité civile automobile"
+author: "Aya Berraho, Lijia Zhou, Ulrich Nguepkat Kaptchuang"
+date: "2025-01-01"
+institute: "Université Paris-Dauphine"
+departement: "Master 2 ISF"
+lang: fr
+output:
+  rmdformats::robobook:
+    highlight: kate
+    use_bookdown: true
+    css: style.css
+    lightbox : true
+    gallery: true
+    code_folding: none
+    message: FALSE
+    warnings: FALSE
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+```{r setup, include=FALSE}
+## Global options
+knitr::opts_chunk$set(cache = FALSE, warning = FALSE, message = FALSE, fig.retina = 2, echo=TRUE)
+options(encoding = 'UTF-8')
+```
+
+```{r, include=FALSE, results = "hide", message = FALSE, warning = FALSE}
+source('functions.R')
+library(ggplot2)
+library(dplyr)
+library(rmarkdown)
+library(kableExtra)
+library(corrplot)
+library(tidyr)
+library(GGally)
+library(caret)
+library(Metrics)
+library(rsample) 
+library(glmnet)
+library(MASS)
+library(gridExtra)
+library(sf)
+library(data.table)
+library(mgcv)
+library(xgboost)
+library(nnet)
+```
+
+<button onclick="toggleCode()">Afficher / Cacher le Code</button>
+
+<script>
+function toggleCode() {
+  var codeBlocks = document.querySelectorAll("pre");
+  codeBlocks.forEach(function(block) {
+    if (block.style.display === "none") {
+      block.style.display = "block";
+    } else {
+      block.style.display = "none";
+    }
+  });
+}
+</script>
+
+# Présentation du projet 
+
+
+
+
+
+# Analyse des données 
+
+## Importation des données 
+On commençe par importer nos jeux de données `train` et `test`. Puis on affiche on les affiche afin d'observer l'allure des données. 
+```{r}
+# Téléchargement du jeu de données 
+train<-read.csv('train_set.csv', header = T, sep = ",",dec=".")
+test<-read.csv('test_set.csv', header = T, sep = ",",dec=".")
+
+# Affichage du jeu de données sous forme de tableau
+rmarkdown::paged_table(train)
+rmarkdown::paged_table(test)
+```
+Le train compte 542 389 lignes et 12 colonnes, tandis que le test compte 135 602 lignes et 11 colonnes, une de moins que le train puisqu'il manque la variable cible `claim`.
+
+```{r}
+summary(train)
+```
+
+Ensuite on affiche un tableau qui présente le nom de chaque variable avec son type et le nombre de valeurs manquantes pour chacune d'entre elles. 
+```{r}
+variable_summary_train <- data.frame(
+  Type = sapply(train, class),
+  Missing_Values = sapply(train, function(x) sum(is.na(x))))
+
+variable_summary_train %>%
+  kable(format = "html", caption = "Résumé des variables TRAIN") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+```{r}
+# Résumé des variables pour le jeu de test
+variable_summary_test <- data.frame(
+  Type = sapply(test, class),
+  Missing_Values = sapply(test, function(x) sum(is.na(x)))
+)
+
+# Affichage sous forme de tableau
+variable_summary_test %>%
+  kable(format = "html", caption = "Résumé des variables (TEST)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+On remarque qu'il n' y a pas de valeurs manquantes ni dans le train ni dans le test. 
+
+On sépare les variables numériques et catégorielles afin de faciliter les prochaines manipulations. 
+```{r}
+#Division en variables numériques et catégorielles 
+numeric_cols <- c("Period_Exp", "Car_Power", "Car_Age", "Age", "Bonus_Malus", "Inhab_density")
+categorical_cols <- c("Car_Model", "Car_Fuel", "Urban_rural_class", "French_region")
+```
+
+## Observations des distributions 
+
+Observons la distribution de notre variable cible. 
+```{r}
+# Distribution de la variable cible 
+plot_percentage(train,"Claim",5)
+```
+La distribution de la variable cible `Claim` montre un fort déséquilibre dans les données. En effet, 96.32% des contrats n’ont enregistré aucun sinistre, tandis que seulement 3.48% en comptent un, et les cas avec deux sinistres ou plus sont extrêmement rares (moins de 0.2%). Ce désiquilibre pose un défi en modélisation. Un modèle classique risque d’être biaisé en faveur des prédictions nulles, réduisant ainsi sa capacité à identifier les cas de sinistre.
+
+Plusieurs stratégies peuvent alors être envisagées. On pourrait utiliser un modèle de comptage, comme une régression de Poisson ou une régression binomiale négative, qui sont adaptées aux variables discrètes et asymétriques. D'autre part, une approche basée sur le rééchantillonnage (sous-échantillonnage des contrats sans sinistre ou sur-échantillonnage des sinistres) pourrait améliorer l’apprentissage du modèle. Une autre alternative serait de transformer le problème en classification binaire (sinistre vs. pas de sinistre) avec une régression logistique.
+
+Ensuite afin de visualiser nos données d'un point de vu géographique on affiche une carte colorée en fonction du nombre de sinitres totale pour chaque région du pays. 
+```{r ehco=FALSE}
+# Créer le vecteur de correspondance
+region_mapping <- c(`Ile-de-France` = "Île-de-France", `Champagne-Ardenne` = "Champagne-Ardenne",
+    Picardie = "Picardie", `Haute-Normandie` = "Haute-Normandie", Centre = "Centre",
+    `Basse-Normandie` = "Basse-Normandie", Bourgogne = "Bourgogne", `Nord-Pas-de-Calais` = "Nord-Pas-de-Calais",
+    Lorraine = "Lorraine", Alsace = "Alsace", `Franche-Comte` = "Franche-Comté",
+    `Pays-de-la-Loire` = "Pays de la Loire", Bretagne = "Bretagne", `Poitou-Charentes` = "Poitou-Charentes",
+    Aquitaine = "Aquitaine", `Midi-Pyrenees` = "Midi-Pyrénées", Limousin = "Limousin",
+    `Rhone-Alpes` = "Rhône-Alpes", Auvergne = "Auvergne", `Languedoc-Roussillon` = "Languedoc-Roussillon",
+    `Provence-Alpes-Cotes-D'Azur` = "Provence-Alpes-Côte d'Azur", Corse = "Corse")
+
+# Appliquer la correspondance aux noms de régions dans le jeu de données
+train_old <- train %>%
+    mutate(French_region = recode(French_region, !!!region_mapping))
+```
+
+```{r echo=FALSE}
+# Calcul du nombre total de Claim par région
+old_claim_region <- train_old %>%
+    group_by(French_region) %>%
+    summarise(Total_Claim = sum(Claim))
+old_france_map <- st_read("regions-avant-redecoupage-2015.geojson")
+# Joindre la carte avec les données
+old_france_map <- old_france_map %>%
+    left_join(old_claim_region, by = c(nom = "French_region"))
+
+# Tracer la carte
+centroides <- old_france_map %>%
+    st_centroid() %>%
+    mutate(long = st_coordinates(.)[, 1], lat = st_coordinates(.)[, 2])
+ggplot(old_france_map) + geom_sf(aes(fill = Total_Claim), color = "white") + scale_fill_viridis_c(option = "C",
+    na.value = "grey90") + geom_text(data = centroides, aes(x = long, y = lat, label = nom),
+    color = "black", size = 2, fontface = "bold") + theme_minimal() + labs(title = "Répartition des sinistres (Claim) par région en France",
+    fill = "Total Claim")
+```
+Cette distribution pourrait être influencée par la densité de la population et le nombre de clients assurés dans chaque région. Pour obtenir une représentation plus significative, nous avons normalisé le nombre de sinistres par 1000 souscripteurs, ce qui permet d’évaluer le risque réel par région indépendamment de la taille de la population assurée.
+
+```{r}
+old_risk_region <- train_old %>%
+    group_by(French_region) %>%
+    summarise(Total_Subscriptions = n(),
+              Total_Claim = sum(Claim)) %>%
+    mutate(Sinistralité_pour_1000 = (Total_Claim / Total_Subscriptions) * 1000)  # Normalisation
+old_france_map <- old_france_map %>%
+    left_join(old_risk_region, by = c(nom = "French_region"))
+ggplot(old_france_map) +
+    geom_sf(aes(fill = Sinistralité_pour_1000), color = "white") +  # Utilisation du taux
+    scale_fill_viridis_c(option = "C", na.value = "grey90") +
+    geom_text(data = centroides, aes(x = long, y = lat, label = nom),
+              color = "black", size = 2, fontface = "bold") +
+    theme_minimal() +
+    labs(title = "Taux de sinistralité par région en France (pour 1000 souscripteurs)",
+         fill = "Sinistres / 1000 souscripteurs")  
+```
+Cette distribution pourrait être influencée par la densité de la population et le nombre de clients assurés dans chaque région. Cependant, une analyse brute du nombre total de sinistres peut être biaisée par ces disparités démographiques. Pour obtenir une représentation plus significative, nous avons normalisé le nombre de sinistres par 1000 souscripteurs, ce qui permet d’évaluer le risque réel par région indépendamment de la taille de la population assurée.
+
+Sur la carte, on observe que certaines régions, comme Rhône-Alpes, présentent un taux de sinistralité particulièrement élevé, ce qui pourrait être lié à des facteurs tels que des conditions climatiques spécifiques, un réseau routier plus dense, ou des comportements de conduite propres à la région. À l’inverse, d’autres zones comme le Midi-Pyrénées et la Corse affichent des taux plus faibles, suggérant un risque de sinistre moins important par assuré.Cette analyse permet donc une meilleure identification des régions à risque, ce qui pourrait aider les assureurs à affiner leur politique tarifaire
+
+
+```{r}
+# Graphique nombre de sinistres en fonction des bonus_malus
+effectif_par_categorie <- train %>%
+  mutate(Bonus_Malus_Cat = ifelse(Bonus_Malus < 100, "Bonus", "Malus")) %>%
+  group_by(Bonus_Malus_Cat) %>%
+  summarise(Nombre_Assures = n())  # Nombre total d'assurés
+
+sinistres_par_categorie <- train %>%
+  mutate(Bonus_Malus_Cat = ifelse(Bonus_Malus < 100, "Bonus", "Malus")) %>%
+  group_by(Bonus_Malus_Cat) %>%
+  summarise(Taux_Sinistres = sum(Claim) / n()) %>%
+  left_join(effectif_par_categorie, by = "Bonus_Malus_Cat")
+
+p1 <- ggplot(sinistres_par_categorie, aes(x = Bonus_Malus_Cat, y = Taux_Sinistres, fill = Bonus_Malus_Cat)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Taux de sinistralité en fonction des catégories Bonus-Malus",
+       x = "Catégorie Bonus-Malus",
+       y = "Proportion de sinistres par assuré") +
+  scale_fill_manual(values = c("Bonus" = "steelblue", "Malus" = "red")) +
+  theme(
+    plot.title = element_text(size = 8, face = "bold", hjust = 0.2))
+
+# Graphique nombre de sinistres en fonction de l'âge du conducteur
+effectif_par_age <- train %>%
+  group_by(Age) %>%
+  summarise(Nombre_Assures = n())  # Nombre total d'assurés
+
+df_age <- train %>%
+  group_by(Age) %>%
+  summarise(Taux_Sinistres = sum(Claim) / n()) %>% 
+  left_join(effectif_par_age, by = "Age") 
+
+p2 <- ggplot(df_age, aes(x = as.factor(Age), y = Taux_Sinistres)) +
+  geom_bar(stat = "identity", fill = "darkgreen") +
+  labs(title = "Taux de sinistralité en fonction de l'âge du conducteur",
+       x = "Âge du conducteur",
+       y = "Proportion de sinistres par assuré") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 8, face = "bold", hjust = 0.5)) +
+  scale_x_discrete(breaks = seq(0, max(df_age$Age), by = 10)) # Espacer les labels de l'axe X
+
+# Afficher les graphiques côte à côte
+grid.arrange(p1, p2, ncol = 2)
+```
+
+
+```{r}
+# Graphique nombre de sinistres en fonction de car_age
+effectif_par_car_age <- train %>%
+  group_by(Car_Age) %>%
+  summarise(Nombre_Assures = n())  
+
+df_car_age <- train %>%
+  group_by(Car_Age) %>%
+  summarise(Taux_Sinistres = sum(Claim) / n()) %>%  
+  left_join(effectif_par_car_age, by = "Car_Age")   
+
+p3 <- ggplot(df_car_age, aes(x = as.factor(Car_Age), y = Taux_Sinistres)) +
+  geom_bar(stat = "identity", fill = "darkgreen") +
+  labs(title = "Taux de sinistralité par âge du véhicule",
+       x = "Âge du véhicule (Car_Age)",
+       y = "Proportion de sinistres par assuré") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 9, face = "bold", hjust = 0.5)) +
+  scale_x_discrete(breaks = seq(0, max(df_car_age$Car_Age), by = 10)) 
+
+
+# Graphique nombre de sinistres en fonction de car_power 
+effectif_par_car_power <- train %>%
+  group_by(Car_Power) %>%
+  summarise(Nombre_Assures = n())  
+
+df_car_power <- train %>%
+  group_by(Car_Power) %>%
+  summarise(Taux_Sinistres = sum(Claim) / n()) %>%  
+  left_join(effectif_par_car_power, by = "Car_Power")   
+
+p4 <- ggplot(df_car_power, aes(x = as.factor(Car_Power), y = Taux_Sinistres)) +
+  geom_bar(stat = "identity", fill = "darkblue") +
+  labs(title = "Taux de sinistralité par puissance des véhicules",
+       x = "Puissance du véhicule (Car_Power)",
+       y = "Proportion de sinistres par assuré") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 9, face = "bold", hjust = 0.5))
+
+grid.arrange(p3, p4, ncol = 2)
+```
+
+### Variables numériques 
+
+```{r}
+plot_list <- list()
+
+# Boucle sur chaque variable numérique
+for (col in numeric_cols) {
+  p <- ggplot(train, aes_string(x = col)) +
+    geom_histogram(bins = 30, fill = "steelblue", color = "black", alpha = 0.7) +
+    labs(title = paste("Distribution de", col), x = col, y = "Fréquence") +
+    theme_minimal()+
+    theme(plot.title = element_text(size = 9, face = "bold"))
+  
+  # Ajouter le graphique à la liste
+  plot_list[[col]] <- p
+}
+
+# Afficher les graphiques (en 3 colonnes pour un affichage optimisé)
+do.call("grid.arrange", c(plot_list, ncol = 3))
+```
+🔹 `Period_Exp`: On observe que la grande majorité des souscripteurs ont été assurés pendant toute l'année, il y a tout de même un pic notable de souscripteurs ayant été assurés seulement un ou deux mois. Cette variable pourrait présenter une corrélation directe avec le nombre de sinistres, car il semble logique que plus une personne est assurée longtemps, plus elle a de chances d’avoir un sinistre.
+
+🔹 `Car_Power`: On observe une concentration des valeurs entre 5 et 8 chevaux, correspondant aux véhicules standards. Les voitures plus puissantes sont rares, ce qui pourrait influencer l’analyse. Une discrétisation en catégories pourrait être pertinente pour mieux capturer l’effet de cette variable.
+
+🔹 `Car_Age`: La majorité des véhicules ont moins de 10 ans, avec une répartition très asymétrique. Bien que certains véhicules plus anciens existent, ils sont en faible proportion. On regardera cette distribution de plus prêts pour voir comment gérer les potentiels valeurs extrêmes.
+
+🔹 `Age`: La distribution suit une forme de cloche proche d’une loi normale, centrée autour de 45-50 ans. Les jeunes conducteurs (<25 ans) et les plus âgés (>75 ans) sont minoritaires. Il pourrait être intéressant d’introduire une variable catégorisant les conducteurs en classes d’âge.
+
+🔹 `Bonus_Malus`: La distribution est fortement asymétrique, avec un pic notable à 50, correspondant au minimum du système Bonus-Malus. Certains conducteurs ont des valeurs très élevées, mais ils restent minoritaires. Une transformation logarithmique pourrait aider à mieux capturer cette variabilité.
+
+🔹 `Inhab_density`: On observe une distribution extrêmement asymétrique, où la plupart des valeurs sont proches de zéro, correspondant aux zones rurales, tandis que quelques valeurs très élevées indiquent les grandes villes. Une transformation logarithmique pourrait limiter l’impact des valeurs extrêmes sur l’analyse.
+
+### Variables Catégorielles
+
+Les distributions des variables catégorielles mettent en évidence certains déséquilibres qui peuvent influencer la qualité des prédictions du modèle :
+
+```{r}
+plot_list <- list()
+
+for (col in categorical_cols) {
+  p <- ggplot(train, aes_string(x = col)) +
+    geom_bar(fill = "steelblue", color = "black") +
+    theme_minimal() +
+    labs(title = paste("Distribution de", col), x = col, y = "Fréquence") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  plot_list[[col]] <- p 
+}
+
+grid.arrange(grobs = plot_list, ncol = 2, nrow = 2)
+```
+
+- **Car_Model** : Certains modèles de voitures sont beaucoup plus fréquents que d’autres, en particulier les modèles B1 et B2, qui dominent largement la répartition. Les autres modèles sont nettement moins représentés, ce qui pourrait indiquer une distribution déséquilibrée influençant les prédictions du modèle.
+
+- **Car_Fuel** : La répartition entre le diesel et l’essence (regular) semble relativement équilibrée, ce qui signifie que le carburant n’introduira probablement pas de déséquilibre significatif dans l’analyse.
+
+- **Urban_rural_class** : La majorité des observations se trouvent dans les classes C et D, correspondant probablement à des zones semi-urbaines ou périurbaines. La classe F est la moins représentée, ce qui peut suggérer un manque de données pour cette catégorie et un possible impact sur la qualité des prédictions dans ces zones.
+
+- **French_region** : On observe une forte disparité entre les régions, certaines comme Champagne-Ardenne et Rhône-Alpes étant sur-représentées, tandis que d’autres comme la Corse ou l’Alsace ont très peu d’observations. Ce déséquilibre peut poser problème si certaines régions ne disposent pas de suffisamment de données pour que le modèle généralise correctement.
+
+
+## Transformation des données 
+Tout d'abord, on remarque que la variable `PolID`ne sert à rien pour l'analyse donc on l'a supprime directement. 
+```{r}
+#Supprimer la variable PolID
+train <- subset(train, select = -PolID)
+test <- subset(test, select = -PolID)
+```
+
+On commence par regarder les variables catégorielles pour voir comment nous allons les encoder. 
+```{r}
+train [categorical_cols]
+```
+```{r}
+# Nombre de catégories par variable
+cat_counts_train <- sapply(train[categorical_cols], function(x) length(unique(x)))
+cat_counts_test <- sapply(test[categorical_cols], function(x) length(unique(x)))
+print(cat_counts_train)
+print(cat_counts_test)
+```
+On transforme les quatre variables catégorielles en facteurs car ceci marche bien pour les modèles régression
+```{r}
+# Transformer les variables catégorielles en facteurs
+train[categorical_cols] <- lapply(train[categorical_cols], as.factor)
+test[categorical_cols] <- lapply(test[categorical_cols], as.factor)
+```
+
+```{r}
+#Vérification
+str(test)
+```
+
+Au vu des distributions des variables `Age`et `Car_Age` observées dans la partie observations, on se pose la question de si certains âges trop avancés seraient irréalistes et représenteraient alors des valeurs aberrantes. On obserbe de plus prêts la distribution de ces deux variables. 
+```{r}
+age_distribution <- train %>%
+    mutate(Age_Category = cut(Age, breaks = c(18, 25, 35, 45, 55, 65, 75, 95, 105), 
+                              labels = c("18-24", "25-34", "35-44", "45-54", "55-64", "65-74", "75-94", "95+"),
+                              right = FALSE)) %>%
+    group_by(Age_Category) %>%
+    summarise(Nombre_d_individus = n(),
+              Nombre_de_sinistres = sum(Claim),
+              Nombre_0_sinistre = sum(Claim == 0),
+              Nombre_1_sinistre = sum(Claim == 1),
+              Nombre_2_ou_3_sinistres = sum(Claim %in% c(2, 3)),
+              Nombre_4_plus_sinistres = sum(Claim >= 4))
+
+# Affichage des résultats
+print(age_distribution)
+```
+On décide de supprimer les lignes avec les individus de 95 ans et plus. 
+
+```{r}
+car_age_distribution <- train %>%
+    mutate(Car_Age_Category = cut(Car_Age, breaks = c(0, 5, 10, 15, 20, 30, 40, 60, 105), 
+                                  labels = c("0-4", "5-9", "10-14", "15-19", "20-29", "30-39", "40-59", "60+"),
+                                  right = FALSE)) %>%
+    group_by(Car_Age_Category) %>%
+    summarise(Nombre_de_voitures = n(),
+              Nombre_de_sinistres = sum(Claim),
+              Nombre_0_sinistre = sum(Claim == 0),
+              Nombre_1_sinistre = sum(Claim == 1),
+              Nombre_2_ou_3_sinistres = sum(Claim %in% c(2, 3)),
+              Nombre_4_plus_sinistres = sum(Claim >= 4))
+
+# Affichage des résultats
+print(car_age_distribution)
+```
+On décide de supprimer les lignes enregistrant des voitures de 60 ans et plus.
+
+```{r}
+# Filtrer le train et le test pour enlever les voitures de 60 ans et plus et les individus de 95 ans et plus
+train <- train %>%
+    filter(Car_Age < 60, Age < 95)
+
+test <- test %>%
+    filter(Car_Age < 60, Age < 95)
+
+# Vérification des nouvelles tailles des datasets
+cat("Taille du train après filtrage :", dim(train), "\n")
+cat("Taille du test après filtrage :", dim(test), "\n")
+```
+
+On normalise les varibles numériques afin d'éviter que des ordres de grandeurs trop différents impactent nos modèles. 
+```{r}
+# Standardisation des données numériques
+numeric_cols <- c("Period_Exp", "Car_Power", "Car_Age", "Age", "Bonus_Malus", "Inhab_density")
+
+# Création d'un scaler à partir du jeu d'entraînement
+scaler <- preProcess(train[, numeric_cols], method = c("center", "scale"))
+
+# Création de copies des datasets
+train_scaled <- train
+test_scaled <- test
+
+# Appliquer la transformation sur les colonnes numériques
+train_scaled[numeric_cols] <- predict(scaler, train[numeric_cols])
+test_scaled[numeric_cols] <- predict(scaler, test[numeric_cols])
+```
+
+```{r}
+#Vérification
+train_scaled 
+test_scaled
+```
+## Corrélation entre les variables 
+On trace la matrice de corrélation entre les variables afin de voir si des variables explicatives sont directement corrélés à notre variable cible et s'il y a des corrélations importantes entre les variables explicatives. 
+
+```{r}
+# Convertir les variables catégorielles en nombres
+#train$Car_Model <- as.numeric(train$Car_Model)
+#train$Urban_rural_class <- as.numeric(train$Urban_rural_class)
+
+ggcorr(train, label = TRUE, label_round = 2, low = "blue", mid = "white", high = "red", size = 2.5) + 
+  ggtitle("Matrice de corrélation des variables") +
+  theme(axis.text.x = element_text(angle = 40, hjust = 0,5, size = 3),  
+        axis.text.y = element_text(size = 2))  
+```
+
+Après analyse de la matrice, on remarque une corrélation négative entre l'âge du conducteur `Age` et le coefficient `Bonus_Malus` (-0.48) est significative. Elle traduit le fait que les conducteurs plus jeunes ont tendance à accumuler plus de malus, tandis que les conducteurs plus expérimentés bénéficient d'un bonus. Une autre relation forte apparaît entre la densité d’habitants `Inhab_density` et la classe urbaine `Urban_rural_class` (0.59), confirmant que les zones urbaines ont une densité de population plus élevée.
+
+La variable cible `Claim` (nombre de sinistres) n’entretient que de faibles corrélations avec les autres variables. Par exemple, la période d’exposition `Period_Exp` est légèrement corrélée avec le nombre de sinistres (0.09), ce qui est intuitif : plus une assurance est active longtemps, plus elle a de chances d’être associée à un sinistre. Cependant, les autres variables, comme l’âge du conducteur, la puissance du véhicule `Car_Power` ou le type de carburant `Car_Fuel`, montrent des relations très faibles avec `Claim`, montrant que ces facteurs seuls n’expliquent pas directement la survenue des sinistres.
+
+```{r}
+# Revenir à des facteurs 
+train$Car_Model <- as.factor(train$Car_Model)
+train$Urban_rural_class <- as.factor(train$Urban_rural_class)
+str(train)
+```
+## Modélisation 
+
+### Échantillonnage 
+On procède à la séparation de notre jeu de données "train" en un jeu d'entrainement et un jeu de test, afin de tester la performance de notre modèle avant de l'appliquer aux données test.
+```{r}
+set.seed(2025)
+
+# Création de l'index pour séparer les données (80% train, 20% test)
+trainIndex <- createDataPartition(train_scaled$Claim, p = 0.8, list = FALSE)
+
+# Séparer les prédicteurs (X) et la variable cible (y)
+X_train <- train_scaled[trainIndex, setdiff(names(train_scaled), "Claim")]
+y_train <- train_scaled$Claim[trainIndex]
+
+X_test <- train_scaled[-trainIndex, setdiff(names(train_scaled), "Claim")]
+y_test <- train_scaled$Claim[-trainIndex]
+
+# Affichage des tailles des ensembles
+cat("📌 Taille du jeu d'entraînement :\n")
+cat("- X_train :", dim(X_train), "\n")
+cat("- y_train :", length(y_train), "\n\n")
+
+cat("📌 Taille du jeu de test :\n")
+cat("- X_test :", dim(X_test), "\n")
+cat("- y_test :", length(y_test), "\n")
+```
+
+```{r}
+#Vérification
+table(y_train)
+table(y_test)
+```
+
+### Métrique 
+Pour nous faciliter la visualisation des performances de nos modèles et leur comparaison, on crée une fonction qui calcule le rmse combiné du train et du test et affiche les résultats. 
+```{r}
+calculate_class_rmse <- function(X_train, X_test, y_train, y_test, y_train_pred, y_test_pred) {
+  
+  # Définition des classes basées sur la fréquence des valeurs de Claim
+  C_1 <- which(y_train %in% c(0, 1))  
+  C_2 <- which(y_train == 2)           
+  C_3 <- which(y_train == 3)          
+  C_4 <- which(y_train > 3)   
+  
+  # 🔍 Étape 1 : Calcul du RMSE par classe pour l'entraînement
+  rmse_1_train <- ifelse(length(C_1) > 0, rmse(y_train[C_1], y_train_pred[C_1]), NA)
+  rmse_2_train <- ifelse(length(C_2) > 0, rmse(y_train[C_2], y_train_pred[C_2]), NA)
+  rmse_3_train <- ifelse(length(C_3) > 0, rmse(y_train[C_3], y_train_pred[C_3]), NA)
+  rmse_4_train <- ifelse(length(C_4) > 0, rmse(y_train[C_4], y_train_pred[C_4]), NA)
+  
+    # Définition des classes basées sur la fréquence des valeurs de Claim
+  C_1 <- which(y_test %in% c(0, 1))  
+  C_2 <- which(y_test == 2)           
+  C_3 <- which(y_test == 3)          
+  C_4 <- which(y_test > 3) 
+  # 🔹 RMSE combiné sur l'entraînement
+  RMSE_c_train <- mean(c(rmse_1_train, rmse_2_train, rmse_3_train, rmse_4_train), na.rm = TRUE)
+  
+  # 🔍 Étape 2 : Calcul du RMSE par classe pour le test
+  rmse_1 <- ifelse(length(C_1) > 0, rmse(y_test[C_1], y_test_pred[C_1]), NA)
+  rmse_2 <- ifelse(length(C_2) > 0, rmse(y_test[C_2], y_test_pred[C_2]), NA)
+  rmse_3 <- ifelse(length(C_3) > 0, rmse(y_test[C_3], y_test_pred[C_3]), NA)
+  rmse_4 <- ifelse(length(C_4) > 0, rmse(y_test[C_4], y_test_pred[C_4]), NA)
+  
+  # 🔹 RMSE combiné sur le test
+  RMSE_c <- mean(c(rmse_1, rmse_2, rmse_3, rmse_4), na.rm = TRUE)
+  
+  # 📊 Affichage des résultats
+  cat("\n📊 Résultats des RMSE par classe et combinés :\n")
+  cat("🔹 RMSE train classe 1 (0-1 sinistres) :", rmse_1_train, "\n")
+  cat("🔹 RMSE train classe 2 (2 sinistre)  :", rmse_2_train, "\n")
+  cat("🔹 RMSE train classe 3 (3 sinistres) :", rmse_3_train, "\n")
+  cat("🔹 RMSE train classe 4 (>=4 sinistres) :", rmse_4_train, "\n")
+  cat("📌 RMSE combiné TRAIN :", RMSE_c_train, "\n\n")
+  
+  cat("🔹 RMSE test classe 1 (0-1 sinistres) :", rmse_1, "\n")
+  cat("🔹 RMSE test classe 2 (2 sinistre)  :", rmse_2, "\n")
+  cat("🔹 RMSE test classe 3 (3 sinistres) :", rmse_3, "\n")
+  cat("🔹 RMSE test classe 4 (>=4 sinistres) :", rmse_4, "\n")
+  cat("📌 RMSE combiné TEST :", RMSE_c, "\n")
+  
+  return(list(RMSE_c_train = RMSE_c_train, RMSE_c_test = RMSE_c))
+}
+```
+
+### Modèles Régression de Poisson 
+Commençons par tester un modèle de poisson simple. 
+```{r}
+# Calcul de la moyenne et de la variance de Claim
+mean_claim <- mean(train$Claim)
+var_claim <- var(train$Claim)
+
+cat("Moyenne de Claim :", mean_claim, "\n")
+cat("Variance de Claim :", var_claim, "\n")
+```
+La variable cible Claim est une variable de type comptage (nombre de sinistres), souvent modélisée avec une loi de Poisson.Ainsi l’analyse des caractéristiques de la variable cible Claim montre que sa moyenne (0.0389) et sa variance (0.0422) sont très proches, ce qui est un bon indicateur de l’adéquation avec une distribution de Poisson.
+
+
+```{r}
+# Ajustement du modèle de Poisson sur le jeu d'entraînement
+poisson_model1 <- glm(y_train ~ ., data = X_train, family = poisson(link = "log"))
+
+# Résumé du modèle
+summary(poisson_model1)
+```
+
+```{r}
+dispersion <- sum(residuals(poisson_model1, type = "pearson")^2) / poisson_model1$df.residual
+cat("Indice de dispersion :", dispersion, "\n")
+```
+
+```{r}
+# Prédictions
+y_train_pred1 <- predict(poisson_model1, newdata = X_train, type = "response")
+y_test_pred1 <- predict(poisson_model1, newdata = X_test, type = "response")
+
+# Arrondir les prédictions
+y_train_pred1_round <- round(y_train_pred1)
+y_test_pred1_round <- round(y_test_pred1)
+```
+
+```{r}
+resultats_rmse <- calculate_class_rmse(X_train, X_test, y_train, y_test, y_train_pred1_round, y_test_pred1_round)
+
+# Accéder aux résultats :
+rmse_combine_train <- resultats_rmse$RMSE_c_train  # RMSE combiné sur TRAIN
+rmse_combine_test <- resultats_rmse$RMSE_c_test    # RMSE combiné sur TEST
+```
+En observant le summary du premier modèle on remarque que certaines variables comme `Car_Model` , `Inhab_density` et `French_region` ne sont pas vraiment significatives. De plus on ajoute une intéraction entre la variable `Age` et `Bonus_Malus` puisqu'elles sont corrélées. 
+
+```{r}
+# Ajustement du modèle réduit de Poisson
+poisson_model_reduit <- glm(y_train ~ . - Car_Model -French_region - Inhab_density +Age:Bonus_Malus -Age -Bonus_Malus ,  
+                            family = poisson(link = "log"), 
+                            data = X_train)
+
+# Résumé du modèle réduit
+summary(poisson_model_reduit)
+```
+```{r}
+dispersion <- sum(residuals(poisson_model_reduit, type = "pearson")^2) / poisson_model1$df.residual
+cat("Indice de dispersion :", dispersion, "\n")
+```
+
+```{r}
+# Prédictions
+y_train_pred2 <- predict(poisson_model_reduit, newdata = X_train, type = "response")
+y_test_pred2 <- predict(poisson_model_reduit, newdata = X_test, type = "response")
+
+# Arrondir les prédictions
+y_train_pred2_round <- round(y_train_pred2)
+y_test_pred2_round <- round(y_test_pred2)
+```
+
+```{r}
+resultats_rmse2 <- calculate_class_rmse(X_train, X_test, y_train, y_test, y_train_pred2_round, y_test_pred2_round)
+
+# Accéder aux résultats :
+rmse_combine_train2 <- resultats_rmse2$RMSE_c_train  # RMSE combiné sur TRAIN
+rmse_combine_test2 <- resultats_rmse2$RMSE_c_test    # RMSE combiné sur TEST
+```
+```{r}
+quantile(X_train$Age)
+```
+
+```{r}
+train_copie <- train 
+```
+
+```{r}
+set.seed(2025)
+
+# Création de l'index pour séparer les données (80% train, 20% test)
+trainIndex_copie <- createDataPartition(train_copie$Claim, p = 0.8, list = FALSE)
+
+# Séparer les prédicteurs (X) et la variable cible (y)
+X_train_copie <- train_copie[trainIndex_copie, setdiff(names(train_copie), "Claim")]
+y_train_copie <- train_copie$Claim[trainIndex_copie]
+
+X_test_copie <- train_copie[-trainIndex_copie, setdiff(names(train_copie), "Claim")]
+y_test_copie <- train_copie$Claim[-trainIndex_copie]
+```
+
+
+```{r}
+# Catégorisation de Car_Power
+X_train_copie$Car_Power_Cat <- cut(X_train_copie$Car_Power, breaks = c(-Inf, 5, 8, Inf), labels = c("Faible", "Moyen", "Élevé"))
+X_test_copie$Car_Power_Cat <- cut(X_test_copie$Car_Power, breaks = c(-Inf, 5, 8, Inf), labels = c("Faible", "Moyen", "Élevé"))
+
+# Catégorisation de Age
+X_train_copie$Age_Cat <- cut(X_train_copie$Age, breaks = c(-Inf, 25, 60, Inf), labels = c("Jeune", "Adulte", "Senior"))
+X_test_copie$Age_Cat <- cut(X_test_copie$Age, breaks = c(-Inf, 25, 60, Inf), labels = c("Jeune", "Adulte", "Senior"))
+
+# Conversion des catégories en facteur
+X_train_copie$Car_Power_Cat <- as.factor(X_train_copie$Car_Power_Cat)
+X_test_copie$Car_Power_Cat <- as.factor(X_test_copie$Car_Power_Cat)
+
+X_train_copie$Age_Cat <- as.factor(X_train_copie$Age_Cat)
+X_test_copie$Age_Cat <- as.factor(X_test_copie$Age_Cat)
+
+# Modèle de régression de Poisson amélioré
+poisson_model_optimized <- glm(
+    y_train ~ Period_Exp + Car_Power_Cat + Car_Age + Age_Cat + Bonus_Malus + 
+               Car_Fuel + Urban_rural_class + French_region + 
+               Age_Cat:Bonus_Malus + Period_Exp:Car_Age, 
+    family = poisson(link = "log"), data = X_train_copie
+)
+
+# Résumé du modèle
+summary(poisson_model_optimized)
+```
+
+```{r}
+# Prédictions
+y_train_pred3 <- predict(poisson_model_optimized, newdata = X_train_copie, type = "response")
+y_test_pred3 <- predict(poisson_model_optimized, newdata = X_test_copie, type = "response")
+
+# Arrondir les prédictions
+y_train_pred3_round <- round(y_train_pred3)
+y_test_pred3_round <- round(y_test_pred3)
+```
+
+
+```{r}
+resultats_rmse3 <- calculate_class_rmse(X_train, X_test, y_train, y_test, y_train_pred3_round, y_test_pred3_round)
+
+# Accéder aux résultats :
+rmse_combine_train3 <- resultats_rmse3$RMSE_c_train  # RMSE combiné sur TRAIN
+rmse_combine_test3 <- resultats_rmse3$RMSE_c_test    # RMSE combiné sur TEST
+```
+
+## Modèles Régression Binomiale Négative
+La régression binomiale négative est une extension de la régression de Poisson, adaptée aux données présentant une sur-dispersion.
+
+```{r}
+# Modèle binomial négatif
+nb_model <- glm.nb(y_train ~ ., data =  X_train)
+summary(nb_model)
+```
+
+```{r}
+# Extraction des coefficients du modèle complet
+coef_df <- as.data.frame(summary(nb_model)$coefficients)
+coef_df$Variable <- rownames(coef_df)
+
+# Visualisation des coefficients (impact des variables)
+ggplot(coef_df, aes(x = reorder(Variable, Estimate), y = Estimate)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_bw() +
+  labs(title = "Impact des variables sur les sinistres (Modèle binomial négatif)",
+       x = "Variable", y = "Coefficient")
+
+```
+
+Pour choisir le meilleur modèle, on compare les critères de sélection comme l'AIC ou le BIC et les mesures de performance (ex: RMSE_C): 
+```{r}
+# Comparaison des AIC pour le modèle de Poisson et le modèle binomial négatif
+AIC(poisson_model_reduit, nb_model)
+```
+
+```{r}
+# Prédictions sur le jeu d'entraînement
+y_train_pred4 <- predict(nb_model, newdata = X_train, type = "response")
+y_test_pred4 <- predict(nb_model, newdata = X_test, type = "response")
+y_train_pred4_round <- round(y_train_pred4)
+y_test_pred4_round <- round(y_test_pred4)
+```
+
+
+```{r}
+resultats_rmse4 <- calculate_class_rmse(X_train, X_test, y_train, y_test, y_train_pred4_round, y_test_pred4_round)
+
+# Accéder aux résultats :
+rmse_combine_train4 <- resultats_rmse4$RMSE_c_train  # RMSE combiné sur TRAIN
+rmse_combine_test4 <- resultats_rmse4$RMSE_c_test    # RMSE combiné sur TEST
+```
+
+Actuellement, le modèle de régression binomiale négative présente un RMSE combiné (RMSE_c) de 1.688535, ce qui indique un certain écart entre les valeurs prédites et les valeurs réelles des sinistres. Les résultats montrent aussi que certaines variables explicatives ne sont pas significatives (p-value > 0.05), ce qui peut introduire du bruit dans le modèle et réduire sa performance.
+
+Par ailleurs, les prédictions actuelles sont des valeurs continues représentant le nombre de sinistres moyen estimé pour chaque observation. L'évaluation du modèle est donc basée sur la comparaison du nombre de sinistres prédit avec le nombre de sinistres réels, et non sur une classification en différentes classes de sinistres.
+
+### Transformation des variables
+Certaines variables numériques comme *Bonus_Malus*, *Inhab_density* et *Car_Age* présentent une distribution fortement asymétrique, ce qui peut nuire à l’efficacité du modèle. On peut appliquer des transformations logarithmiques pour les rendre plus symétriques :
+
+```{r}
+train_copy <- train 
+test_copy <- test  
+```
+
+```{r}
+# Transformation
+train_copy$Bonus_Malus <- log1p(train_copy$Bonus_Malus)
+test_copy$Bonus_Malus <- log1p(test_copy$Bonus_Malus)
+
+train_copy$Inhab_density <- log1p(train_copy$Inhab_density)
+test_copy$Inhab_density <- log1p(test_copy$Inhab_density)
+
+train_copy$Car_Age <- sqrt(train_copy$Car_Age)
+test_copy$Car_Age <- sqrt(test_copy$Car_Age)
+
+```
+
+Il pourrait également être intéressant d’ajouter des interactions entre certaines variables corrélées (ex: Urban_rural_class et Inhab_density) pour capturer des effets combinés :
+```{r}
+#Interaction entre Variables
+train_copy$Urban_Inhab <- as.numeric(train_copy$Urban_rural_class) * train_copy$Inhab_density
+test_copy$Urban_Inhab <- as.numeric(test_copy$Urban_rural_class) * test_copy$Inhab_density
+
+ 
+train_copy <- train_copy[, !(names(train_copy) %in% c("Urban_rural_class", "Inhab_density"))]
+test_copy <- test_copy[, !(names(test_copy) %in% c("Urban_rural_class", "Inhab_density"))]
+```
+
+ 
+```{r}
+trainIndex <- createDataPartition(train_copy$Claim, p = 0.8, list = FALSE)
+
+X_train_copy <- train_copy[trainIndex, setdiff(names(train_copy), "Claim")]
+y_train_copy <- train_copy$Claim[trainIndex]
+
+X_test_copy <- train_copy[-trainIndex, setdiff(names(train_copy), "Claim")]
+y_test_copy <- train_copy$Claim[-trainIndex]
+```
+
+ 
+```{r}
+numeric_cols <- names(X_train_copy)[sapply(X_train_copy, is.numeric)]
+# Création du scaler basé sur les données d'entraînement
+
+scaler <- preProcess(X_train_copy[, numeric_cols], method = c("center", "scale"))
+# Application de la transformation sur X_train_copy et X_test_copy
+
+X_train_copy_scaled <- X_train_copy
+X_test_copy_scaled <- X_test_copy
+
+
+X_train_copy_scaled[, numeric_cols] <- predict(scaler, X_train_copy[, numeric_cols])
+X_test_copy_scaled[, numeric_cols] <- predict(scaler, X_test_copy[, numeric_cols])
+```
+
+
+### Ajout d’une Pénalisation (LASSO)
+
+L’approche LASSO (L1-regularization) permet de réduire l’effet des variables peu significatives en mettant à zéro leurs coefficients :
+
+```{r}
+train_matrix <- as.matrix(X_train_copy_scaled)  # Conversion en matrice des prédicteurs
+
+# Application du Lasso pour la sélection de variables
+lasso_cv <- cv.glmnet(train_matrix, y_train_copy, family = "poisson", alpha = 1)
+
+# Extraction de la meilleure valeur de lambda
+lambda_opt <- lasso_cv$lambda.min
+
+# Extraction des variables sélectionnées par Lasso
+selected_vars <- rownames(coef(lasso_cv, s = "lambda.min"))[-1]
+
+formula_lasso <- as.formula(paste("y_train_copy ~", paste(selected_vars, collapse = " + ")))
+```
+
+```{r}
+# Modèle binomial négatif avec les variables sélectionnées
+nb_lasso_model <- glm.nb(formula_lasso, data = X_train_copy_scaled)
+nb_model_optim <- stepAIC(nb_lasso_model, direction = "backward")
+
+summary(nb_model_optim)
+```
+
+
+```{r}
+# Prédictions
+y_train_pred_optim <- predict(nb_model_optim, newdata = X_train_copy_scaled, type = "response")
+y_test_pred_optim <- predict(nb_model_optim, newdata = X_test_copy_scaled, type = "response")
+#Arrondir les prédictions
+y_train_pred_optim_round <- round(y_train_pred_optim)
+y_test_pred_optim_round <- round(y_test_pred_optim)
+```
+
+```{r}
+resultats_rmse5 <- calculate_class_rmse(X_train, X_test, y_train, y_test, y_train_pred_optim_round, y_test_pred_optim_round)
+
+# Accéder aux résultats :
+rmse_combine_train5 <- resultats_rmse5$RMSE_c_train  # RMSE combiné sur TRAIN
+rmse_combine_test5 <- resultats_rmse5$RMSE_c_test    # RMSE combiné sur TEST
+```
+```{r}
+table(y_train_copy)
+table(y_train_pred_optim_round)
+table(y_test_copy)
+table(y_test_pred_optim_round)
+```
+
+------------------------------------------------------
+## Modèle "composite"
+Ici on présente une approche structurée de la modélisation pour la prédiction des sinistres en considèrant l'associant de plusieurs modèles logistique.
+
+### Modélisation
+La modélisation est réalisée en plusieurs étapes. Tout d'abord, nous générons des variables binaires à partir de la variable `Claim` pour structurer le problème en sous-étapes. Ensuite, plusieurs modèles sont entraînés :
+
+1. Un modèle logistique pour prédire la présence ou l'absence d'un sinistre.
+2. Un second modèle logistique pour distinguer entre un sinistre unique et plusieurs sinistres.
+3. Un troisième modèle logistique pour affiner la distinction lorsque le nombre de sinistres dépasse une certaine valeur.
+4. Un modèle de régression de Poisson pour estimer précisément le nombre de sinistres lorsque les précédentes étapes indiquent un nombre élevé.
+
+```{r modele_composite}
+# Fonction pour entraîner les modèles avec oversampling
+modele <- function(data) {
+  set.seed(2025)  # Assurer la reproductibilité des résultats
+  
+  # Création des variables binaires pour les différentes étapes de prédiction
+  data_copy <- data %>%
+    mutate(
+      Claim_bin = as.factor(ifelse(Claim > 0, 1, 0)),   # 0 : pas de sinistre, 1 : sinistre
+      Claim_1_plus = as.factor(ifelse(Claim > 1, 1, 0)),  # 0 : un sinistre, 1 : plus d'un sinistre
+      Claim_2_plus = as.factor(ifelse(Claim > 2, 1, 0))   # 0 : deux sinistres, 1 : plus de deux sinistres
+    )
+  
+  # Conversion de la variable d'origine en facteur pour le modèle binaire
+  data_copy$Claim <- as.factor(data_copy$Claim)
+  
+  # Modèle 1 : Prédiction de la présence ou non d'un sinistre
+  model_bin <- glm(Claim_bin ~ ., data = data_copy %>% dplyr::select(-Claim_1_plus, -Claim_2_plus, -Claim), family = binomial)
+  
+  # Sélection des données pour les cas présentant un sinistre
+  data_sinistre <- data_copy %>% filter(Claim_bin == 1) %>% dplyr::select(-Claim_bin)
+  table(data_sinistre$Claim_2_plus)
+  
+  # Modèle 2 : Prédiction entre un sinistre et plusieurs sinistres
+  model_1_plus <- glm(Claim_1_plus ~ ., data = data_sinistre %>% dplyr::select(-Claim_2_plus, -Claim), family = binomial)
+  
+  # Sélection des cas où plusieurs sinistres sont possibles
+  data_1_plus <- data_sinistre %>% filter(Claim_1_plus == 1) %>% dplyr::select(-Claim_1_plus)
+  
+  # Modèle 3 : Prédiction entre exactement deux sinistres et plus de deux sinistres
+  model_2_plus <- glm(Claim_2_plus ~ ., data = data_1_plus %>% dplyr::select(-Claim), family = binomial)
+  
+  # Sélection des données pour la régression de Poisson (plus de deux sinistres)
+  data_2_plus <- data_1_plus %>% filter(Claim_2_plus == 1) %>% dplyr::select(-Claim_2_plus)
+  data_2_plus$Claim <- as.numeric(data_2_plus$Claim)
+  data_2_plus$Claim <- as.integer(data_2_plus$Claim)
+  
+  # Modèle 4 : Régression de Poisson pour estimer le nombre de sinistres
+  model_poisson <- glm(Claim ~ ., data = data_2_plus, family = poisson)
+  
+  return(list(model_bin = model_bin,
+              model_1_plus = model_1_plus,
+              model_2_plus = model_2_plus,
+              model_poisson = model_poisson))
+}
+```
+
+
+### Prédiction
+
+La fonction de prédiction applique les modèles de façon séquentielle. Pour chaque observation, le processus est le suivant :
+
+1. Le modèle binaire détermine si un sinistre est présent.
+2. Si un sinistre est détecté, le modèle "1_plus" distingue entre un sinistre unique et plusieurs sinistres.
+3. En cas de prédiction de plusieurs sinistres, le modèle "2_plus" précise si le nombre est exactement de deux.
+4. Lorsque le modèle "2_plus" indique plus de deux sinistres, le modèle de Poisson est utilisé pour estimer le nombre exact.
+
+```{r response}
+predict_claims <- function(models, data,
+                           threshold_bin = 0.5,
+                           threshold_1_plus = 0.5,
+                           threshold_2_plus = 0.5) {
+  # Prédiction du modèle binaire sur l'ensemble des données
+  prob_bin <- predict(models$model_bin, newdata = data, type = "response")
+  pred_bin <- ifelse(prob_bin > threshold_bin, 1, 0)
+  
+  # Initialisation des prédictions finales
+  final_pred <- numeric(nrow(data))
+  
+  # Pour les observations sans sinistre prédit (pred_bin == 0)
+  final_pred[pred_bin == 0] <- 0
+  
+  # Pour les observations avec sinistre prédit (pred_bin == 1)
+  ind_bin <- which(pred_bin == 1)
+  if (length(ind_bin) > 0) {
+    # Prédiction en bloc avec le modèle "1_plus"
+    prob_1_plus <- predict(models$model_1_plus, newdata = data[ind_bin, , drop = FALSE], type = "response")
+    pred_1_plus <- ifelse(prob_1_plus > threshold_1_plus, 1, 0)
+    
+    # Si le modèle "1_plus" prédit 0 : exactement 1 sinistre
+    ind_1 <- ind_bin[pred_1_plus == 0]
+    final_pred[ind_1] <- 1
+    
+    # Sinon, pour les cas où "1_plus" prédit 1
+    ind_1_plus <- ind_bin[pred_1_plus == 1]
+    if (length(ind_1_plus) > 0) {
+      # Prédiction en bloc avec le modèle "2_plus"
+      prob_2_plus <- predict(models$model_2_plus, newdata = data[ind_1_plus, , drop = FALSE], type = "response")
+      pred_2_plus <- ifelse(prob_2_plus > threshold_2_plus, 1, 0)
+      
+      # Si "2_plus" prédit 0 : exactement 2 sinistres
+      ind_2 <- ind_1_plus[pred_2_plus == 0]
+      final_pred[ind_2] <- 2
+      
+      # Sinon, pour les cas où "2_plus" prédit 1 : utilisation du modèle de Poisson
+      ind_poisson <- ind_1_plus[pred_2_plus == 1]
+      if (length(ind_poisson) > 0) {
+        pred_poisson <- predict(models$model_poisson, newdata = data[ind_poisson, , drop = FALSE], type = "response")
+        final_pred[ind_poisson] <- round(pred_poisson)
+      }
+    }
+  }
+  
+  return(final_pred)
+}
+```
+
+### Entraînement et Évaluation des Modèles
+
+Les modèles sont entraînés sur l'ensemble d'entraînement. Ensuite, la fonction `predict_claims` est utilisée pour générer des prédictions sur l'ensemble de test. L'évaluation se fait à l'aide de l'erreur quadratique moyenne (RMSE) calculée par classe et sous forme combinée.
+
+```{r}
+# Fonction de prétraitement des données
+traitement <- function(train, test) {
+  set.seed(2025)  # Fixer un seed pour la reproductibilité
+  
+  # 🔹 **1. Transformation logarithmique pour éviter log(0)**
+  train <- train %>%
+    mutate(Inhab_density_log = log(Inhab_density + 1),
+           Car_Age_log = log(Car_Age + 1))
+
+  test <- test %>%
+    mutate(Inhab_density_log = log(Inhab_density + 1),
+           Car_Age_log = log(Car_Age + 1))
+
+  # 🔹 **2. Création d'une variable catégorielle `Age_Group`**
+  train <- train %>%
+    mutate(Age_Group = case_when(
+      Age < 18 ~ "Mineur",
+      Age >= 18 & Age < 25 ~ "Jeune conducteur",
+      Age >= 25 & Age < 40 ~ "Adulte jeune",
+      Age >= 40 & Age < 60 ~ "Adulte expérimenté",
+      Age >= 60 ~ "Senior"
+    ))
+
+  test <- test %>%
+    mutate(Age_Group = case_when(
+      Age < 18 ~ "Mineur",
+      Age >= 18 & Age < 25 ~ "Jeune conducteur",
+      Age >= 25 & Age < 40 ~ "Adulte jeune",
+      Age >= 40 & Age < 60 ~ "Adulte expérimenté",
+      Age >= 60 ~ "Senior"
+    ))
+
+  # 🔹 **3. Suppression des colonnes originales (`Age`, `Car_Age`, `Inhab_density`)**
+  train <- train %>% dplyr::select(-Car_Age, -Age, -Inhab_density)
+  test <- test %>% dplyr::select(-Car_Age, -Age, -Inhab_density)
+
+
+  train_scaled <- train
+  test_scaled <- test
+
+  # 🔹 **6. Séparation des données en jeu d'entraînement et jeu de test**
+  trainIndex <- createDataPartition(train_scaled$Claim, p = 0.8, list = FALSE)
+
+  X_train <- train_scaled[trainIndex, ]  # Inclut `Claim`
+  X_test <- train_scaled[-trainIndex, ]  # Inclut `Claim`
+
+  return(list(
+    train = train_scaled,
+    test = test_scaled,
+    X_train = X_train,  # Inclut `Claim`
+    X_test = X_test     # Inclut `Claim`
+  ))
+}
+
+# 🔹 **7. Application du traitement sur train et test**
+traitement_data <- traitement(train, test)
+
+train_final <- traitement_data$train
+test_final <- traitement_data$test
+X_train_final <- traitement_data$X_train  # Inclut `Claim`
+X_test_final <- traitement_data$X_test    # Inclut `Claim`
+
+```
+
+
+
+
+```{r}
+# Entraînement des modèles sur l'ensemble d'entraînement
+models <- modele(X_train_final)
+```
+
+
+```{r rmse_combines}
+# Fonction pour calculer le RMSE par classe et le RMSE combiné
+rmse_combine <- function(y_true, y_pred) {
+  # Définition des classes selon la fréquence des sinistres
+  C1 <- which(y_true %in% c(0, 1))  # Classe très fréquente
+  C2 <- which(y_true == 2)          # Classe fréquente
+  C3 <- which(y_true == 3)          # Classe rare
+  C4 <- which(y_true >= 4)          # Classe très rare
+
+  # Calcul du RMSE pour chaque classe (si présente)
+  rmse_1 <- if (length(C1) > 0) rmse(y_true[C1], y_pred[C1]) else NA
+  rmse_2 <- if (length(C2) > 0) rmse(y_true[C2], y_pred[C2]) else NA
+  rmse_3 <- if (length(C3) > 0) rmse(y_true[C3], y_pred[C3]) else NA
+  rmse_4 <- if (length(C4) > 0) rmse(y_true[C4], y_pred[C4]) else NA
+
+  # Calcul du RMSE combiné en prenant la moyenne des valeurs non manquantes
+  rmse_values <- c(rmse_1, rmse_2, rmse_3, rmse_4)
+  RMSE_C <- mean(rmse_values, na.rm = TRUE)
+
+  # Affichage des résultats par classe et du RMSE global
+  print(paste("RMSE C1 :", round(rmse_1, 4)))
+  print(paste("RMSE C2 :", round(rmse_2, 4)))
+  print(paste("RMSE C3 :", round(rmse_3, 4)))
+  print(paste("RMSE C4 :", round(rmse_4, 4)))
+  print(paste("RMSE Combiné (RMSE_C) :", round(RMSE_C, 4)))
+
+  return(RMSE_C)
+}
+```
+
+```{r}
+# 0.05, 0.3, 0.3
+# Évaluation sur le jeu de test
+y_pred <- predict_claims(models, X_test_final, threshold_bin = 0.03, threshold_1_plus = 0.4, threshold_2_plus = 0.3)
+table(y_pred)
+```
+
+```{r}
+y_true <- X_test_final$Claim
+table(y_true)
+rmse_c_result <- rmse_combine(y_true, y_pred)
+```
+
+```{r}
+# Évaluation sur l'ensemble d'entraînement
+y_true <- X_train_final$Claim
+y_pred <- predict_claims(models, X_train_final, threshold_bin = 0.03, threshold_1_plus = 0.4, threshold_2_plus = 0.3)
+rmse_c_result <- rmse_combine(y_true, y_pred)
+```
+
+### Import csv 
+```{r}
+models <- modele(train_final)
+# Prédiction sur le jeu de test test final
+hat_y <- predict_claims(models, test_final, threshold_bin = 0.03, threshold_1_plus = 0.2, threshold_2_plus = 0.3)
+table(hat_y)
+```
+
+on va mainteant sauvegarder les prédictions dans un fichier csv
+```{r}
+# Ajouter les prédictions `y_hat` à `test_final`
+test_final$hat_y <- hat_y
+
+# Sauvegarde du fichier test_final avec les prédictions
+write.csv(test_final, "test_predictions.csv", row.names = FALSE)
+
+# Message de confirmation
+cat("✅ Le fichier test_predictions.csv a été enregistré avec succès !\n")
+```
+
+### Analyse du modèle
+
+```{r}
+# Créer un dataframe avec les vraies valeurs et les prédictions
+df_compare <- data.frame(
+  Réel = y_true,
+  Prédit = y_pred
+)
+
+# Tracer un histogramme des prédictions et des valeurs réelles
+ggplot(df_compare, aes(x = Prédit, fill = "Prédit")) +
+  geom_histogram(alpha = 0.5, bins = 20, position = "identity") +
+  geom_histogram(aes(x = Réel, fill = "Réel"), alpha = 0.6, bins = 20, position = "identity") +
+  scale_fill_manual(values = c("Prédit" = "blue", "Réel" = "red")) +
+  labs(title = "Distribution des valeurs réelles et prédites",
+       x = "Nombre de sinistres",
+       y = "Fréquence") +
+  theme_minimal()
+
+
+# Ajouter une colonne des erreurs (différence entre réel et prédit)
+
+df_compare$Erreur <- df_compare$Réel - df_compare$Prédit
+# Ajouter une colonne "Classe" selon la valeur réelle
+
+df_compare$Classe <- cut(df_compare$Réel,
+                         breaks = c(-1, 1, 2, 3, Inf),
+                         labels = c("C1", "C2", "C3", "C4"))
+
+
+# Tracer un boxplot des erreurs par classe
+ggplot(df_compare, aes(x = Classe, y = Erreur, fill = Classe)) +
+  geom_boxplot() +
+  labs(title = "Erreur de prédiction par classe",
+       x = "Classe de sinistres",
+       y = "Erreur (Réel - Prédit)") +
+  theme_minimal()
+
+# Générer la matrice de confusion
+conf_matrix <- confusionMatrix(factor(y_pred), factor(y_true))
+
+# Extraire les valeurs de la matrice de confusion
+cm_table <- as.data.frame(conf_matrix$table)
+
+
+# Tracer un heatmap de la matrice de confusion
+ggplot(cm_table, aes(Prediction, Reference, fill = Freq)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "blue") +
+  labs(title = "Matrice de confusion",
+       x = "Prédiction",
+       y = "Valeur réelle") +
+  theme_minimal()
+```
+
+## Modèles supplémentaires 
+
+### Modèle GAM (Generalized Additive Model)
+
+Le modèle GAM (Generalized Additive Model) est une extension du modèle de régression généralisée (GLM), qui permet de capturer des relations non linéaires entre les variables explicatives et la variable cible. Contrairement aux modèles linéaires classiques qui supposent une relation linéaire entre les prédicteurs et la réponse, GAM utilise des fonctions de lissage pour mieux représenter les variations complexes dans les données.
+
+Dans notre cas, nous avons utilisé des fonctions splines (s(Variable)) pour certaines variables numériques, ce qui permet de modéliser des relations plus flexibles au lieu d’imposer une relation linéaire stricte.
+
+```{r}
+# Vérifier et convertir les variables catégoriques en facteur
+X_train_copy_scaled[] <- lapply(X_train_copy_scaled, function(x) if(is.character(x) || is.factor(x)) as.factor(x) else x)
+X_test_copy_scaled[] <- lapply(X_test_copy_scaled, function(x) if(is.character(x) || is.factor(x)) as.factor(x) else x)
+
+# Vérification de la structure des données
+str(X_train_copy_scaled)
+str(X_test_copy_scaled)
+```
+
+```{r}
+# Définition du modèle GAM
+gam_model <- gam(y_train_copy ~
+                   s(Period_Exp) + s(Car_Power) + s(Car_Age) + s(Age) +
+                   s(Bonus_Malus) + 
+                   Urban_Inhab + French_region + Car_Model + Car_Fuel,
+                 family = nb(),  # Régression binomiale négative
+                 data = X_train_copy_scaled)
+
+# Affichage du résumé du modèle
+summary(gam_model)
+```
+
+```{r}
+# Prédictions
+y_test_pred_gam <- predict(gam_model, newdata = X_test_copy_scaled, type = "response")
+y_train_pred_gam <- predict(gam_model, newdata = X_train_copy_scaled, type = "response")
+
+# Arrondir les prédictions
+y_train_pred_gam_round <- round(y_train_pred_gam)
+y_test_pred_gam_round <- round(y_test_pred_gam)
+```
+
+
+```{r}
+# Calcul du RMSE pour chaque groupe
+
+rmse_1_Gam <- ifelse(length(C_1) > 0, rmse(y_test_copy[C_1], y_test_pred_gam_round[C_1]), NA)
+rmse_2_Gam <- ifelse(length(C_2) > 0, rmse(y_test_copy[C_2], y_test_pred_gam_round[C_2]), NA)
+rmse_3_Gam <- ifelse(length(C_3) > 0, rmse(y_test_copy[C_3], y_test_pred_gam_round[C_3]), NA)
+rmse_4_Gam <- ifelse(length(C_4) > 0, rmse(y_test_copy[C_4], y_test_pred_gam_round[C_4]), NA)
+
+# Calcul du RMSE_C combiné
+RMSE_C_GAM <- mean(c(rmse_1_Gam, rmse_2_Gam, rmse_3_Gam, rmse_4_Gam), na.rm = TRUE)
+
+
+# Affichage du résultat
+cat("📊 RMSE combiné (RMSE_C) pour le modèle GAM :", RMSE_C_GAM, "\n")
+```
+
+### Modèle XG Boost 
+
+Nous définissons une métrique personnalisée `custom_rmse_c()` qui calcule le RMSE par classe de sinistre et en fait la moyenne.
+
+```{r}
+#Fonction de métrique personnalisée
+custom_rmse_c <- function(preds, dtrain) {
+  labels <- getinfo(dtrain, "label")
+
+  C_1 <- which(labels %in% c(0, 1))
+  C_2 <- which(labels == 2)
+  C_3 <- which(labels == 3)
+  C_4 <- which(labels > 3)
+
+  rmse_1 <- ifelse(length(C_1) > 0, rmse(labels[C_1], preds[C_1]), NA)
+  rmse_2 <- ifelse(length(C_2) > 0, rmse(labels[C_2], preds[C_2]), NA)
+  rmse_3 <- ifelse(length(C_3) > 0, rmse(labels[C_3], preds[C_3]), NA)
+  rmse_4 <- ifelse(length(C_4) > 0, rmse(labels[C_4], preds[C_4]), NA)
+
+  rmse_c <- mean(c(rmse_1, rmse_2, rmse_3, rmse_4), na.rm = TRUE)
+
+  return(list(metric = "custom_rmse_c", value = rmse_c))
+}
+```
+
+
+```{r}
+# Création des DMatrix pour XGBoost
+dtrain <- xgb.DMatrix(data = X_train, label = y_train)
+dtest  <- xgb.DMatrix(data = X_test, label = y_test)
+```
+
+
+Nous utilisons un modèle XGBoost avec une régression de Poisson (`count:poisson`) pour modéliser les sinistres.
+
+```{r}
+# Définition des paramètres du modèle
+params <- list(
+  booster          = "gbtree",
+  objective        = "count:poisson",
+  eval_metric      = custom_rmse_c,
+  eta              = 0.1,
+  subsample        = 0.8,
+  colsample_bytree = 0.8
+)
+
+# Liste de surveillance
+watchlist <- list(train = dtrain, eval = dtest)
+
+# Entraînement du modèle
+model <- xgb.train(
+  params                = params,
+  data                  = dtrain,
+  nrounds               = nrounds,
+  watchlist             = watchlist,
+  early_stopping_rounds = 10,
+  verbose               = 1, 
+  maximize              = FALSE
+)
+```
+
+Nous évaluons le modèle à l'aide du RMSE standard et du RMSE combiné pondéré par classe.
+
+```{r}
+# Prédictions sur le jeu d'entraînement et de test
+y_train_pred <- predict(model, dtrain)
+y_test_pred<- predict(model, dtest)
+
+# Calcul du RMSE standard
+rmse_train <- rmse(y_train, y_train_pred)
+rmse_test  <- rmse(y_test, y_test_pred)
+
+cat("RMSE sur le train :", round(rmse_train, 4), "\n")
+cat("RMSE sur le test :", round(rmse_test, 4), "\n")
+```
+
+```{r}
+#Calcul du RMSE combiné
+rmse_comb_train <- calculate_class_rmse (X_train, X_test, y_train, y_test, y_train_pred, y_test_pred)
+cat("RMSE combiné sur le train :", round(rmse_comb_train, 4), "\n")
+
+rmse_comb_test <- rmse_combine(y_test, pred_test)
+cat("RMSE combiné sur le test :", round(rmse_comb_test, 4), "\n")
+```
+
+Ce modèle XGBoost permet de prédire le nombre de sinistres en s'appuyant sur une régression de Poisson. Nous avons évalué ses performances à l'aide de deux métriques :
+- Le RMSE standard, qui mesure l'écart moyen entre les valeurs réelles et prédites.
+- Le RMSE combiné, qui ajuste l'évaluation en fonction de la fréquence des sinistres.
+
+L'utilisation de la métrique `custom_rmse_c()` nous permet d'améliorer la prise en compte des sinistres rares dans la prédiction.
+

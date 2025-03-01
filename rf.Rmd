@@ -1,0 +1,99 @@
+---
+title: "rf"
+output: html_document
+---
+
+
+```{r}
+library(randomForest)
+library(caret)  # Pour la gestion des données
+```
+
+```{r}
+library(rmarkdown)
+library(dplyr)
+
+
+#importation des données
+df<-read.csv('./data/train_set_clean.csv', header = T, sep = ",",dec=".")
+
+
+variables <- classifier_variables_tab(df)
+numeric_variables <- variables$variables_numeriques
+categorical_variables <- append(variables$variables_categorielles, variables$variables_binaires)
+
+
+#convertir les varianles catégorielles en factor
+df[categorical_variables] <- lapply(df[categorical_variables], factor)
+
+
+df<-df %>% dplyr::select(-Car_Age,-Age,-Age_log,-Inhab_density )
+#test<- test %>% select(-Claim)
+
+str(df)
+```
+
+
+```{r}
+set.seed(123)  # Fixer un seed pour la reproductibilité
+index <- createDataPartition(df$Claim_bin, p = 0.8, list = FALSE)
+X_train <- df[index, ]
+X_test <- df[-index, ]
+```
+
+```{r}
+# Construction du modèle Random Forest
+set.seed(123)
+model_rf <- randomForest(Claim ~ ., 
+                         data = X_train, 
+                         ntree = 500,      # Nombre d'arbres (500 est un bon point de départ)
+                         mtry = sqrt(ncol(X_train) - 1),  # Nombre de variables testées à chaque split
+                         importance = TRUE)  # Pour voir l'importance des variables
+
+# Affichage du modèle
+print(model_rf)
+```
+
+
+ Évaluation du modèle
+Prédictions et matrice de confusion
+```{r}
+# Prédiction des classes sur le jeu de test
+test$pred_rf <- predict(model_rf, newdata = test)
+
+# Matrice de confusion
+conf_matrix <- table(test$Claim, test$pred_rf)
+print(conf_matrix)
+
+# Calcul de l'accuracy
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+print(paste("Accuracy :", round(accuracy, 4)))
+```
+
+
+
+ Visualisation de l’importance des variables
+```{r}
+# Affichage des variables les plus importantes
+importance(model_rf)
+
+# Graphique des variables importantes
+varImpPlot(model_rf)
+```
+
+
+```{r}
+# Calcul du RMSE après optimisation
+
+y_test_pred <- predict(nb_model_optim, newdata = X_test_scaled, type = "response")
+
+rmse_optim_1 <- ifelse(length(C_1) > 0, rmse(y_test[C_1], y_test_pred[C_1]), NA)
+rmse_optim_2 <- ifelse(length(C_2) > 0, rmse(y_test[C_2], y_test_pred[C_2]), NA)
+rmse_optim_3 <- ifelse(length(C_3) > 0, rmse(y_test[C_3], y_test_pred[C_3]), NA)
+rmse_optim_4 <- ifelse(length(C_4) > 0, rmse(y_test[C_4], y_test_pred[C_4]), NA)
+
+RMSE_c_optim <- mean(c(rmse_optim_1, rmse_optim_2, rmse_optim_3, rmse_optim_4), na.rm = TRUE)
+
+cat("📊 RMSE combiné après optimisation :", RMSE_c_optim, "\n")
+```
+

@@ -1,0 +1,312 @@
+---
+title: "Regression model"
+author: "Ulrich Nguepkap Katchuang"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+    use_bookdown: true
+    lightbox: true
+    gallery: true
+    code_folding: hide
+    train_print: paged
+    theme: flatly
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+params:
+  region: France
+  year: 2025
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  tidy=TRUE
+)
+
+source("functions.R")
+```
+
+
+```{r data_display}
+library(rmarkdown)
+library(dplyr)
+
+
+#importation des données
+df<-read.csv('./data/train_set_clean.csv', header = T, sep = ",",dec=".")
+
+
+variables <- classifier_variables_tab(df)
+numeric_variables <- variables$variables_numeriques
+categorical_variables <- append(variables$variables_categorielles, variables$variables_binaires)
+
+
+#convertir les varianles catégorielles en factor
+df[categorical_variables] <- lapply(df[categorical_variables], factor)
+
+
+train<-df %>% dplyr::select(-Car_Age,-Age,-Age_log,-Inhab_density )
+#test<- test %>% select(-Claim)
+
+str(train)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+# calcul du rmse combine
+
+
+
+```{r}
+# Charger les bibliothèques nécessaires
+library(dplyr)
+library(caret)
+
+# Fonction d'entraînement des modèles
+modele <- function(data) {
+  set.seed(123)  # Fixer un seed pour la reproductibilité
+
+  # 🔹 Création des variables binaires
+  data_copy <- data %>%
+    mutate(
+      Claim_bin = as.factor(ifelse(Claim > 0, 1, 0)),
+      Claim_1_plus = as.factor(ifelse(Claim > 1, 1, 0)),
+      Claim_2_plus = as.factor(ifelse(Claim > 2, 1, 0))
+    )
+
+  # Standardisation des variables numériques
+  numeric_variables <- names(data_copy)[sapply(data_copy, is.numeric)]
+  if (length(numeric_variables) > 0) {
+    preproc <- preProcess(data_copy[, numeric_variables], method = c("center", "scale"))
+    data_copy[, numeric_variables] <- predict(preproc, data_copy[, numeric_variables])
+  }
+  
+  # Oversampling pour équilibrer les classes
+  data_copy <- caret::upSample(
+    x = data_copy %>% dplyr::select(-Claim_bin),
+    y = data_copy$Claim_bin,
+    yname = "Claim_bin"
+  )
+
+  # 🔹 Modèle 1 : Prédiction binaire (sinistre ou pas)
+  model_bin <- glm(Claim_bin ~ ., data = data_copy %>% dplyr::select(-Claim_1_plus, -Claim_2_plus, -Claim), family = binomial)
+
+  # 🔹 Modèle 2 : Un sinistre ou plus ?
+  data_sinistre <- data_copy %>% filter(Claim_bin == 1) %>% dplyr::select(-Claim_bin)
+  model_1_plus <- glm(Claim_1_plus ~ ., data = data_sinistre %>% dplyr::select(-Claim_2_plus, -Claim), family = binomial)
+
+  # 🔹 Modèle 3 : Deux sinistres ou plus ?
+  data_1_plus <- data_sinistre %>% filter(Claim_1_plus == 1) %>% dplyr::select(-Claim_1_plus)
+  model_2_plus <- glm(Claim_2_plus ~ ., data = data_1_plus %>% dplyr::select(-Claim), family = binomial)
+
+  # 🔹 Modèle 4 : Régression de Poisson pour plus de 2 sinistres
+  data_2_plus <- data_1_plus %>% filter(Claim_2_plus == 1) %>% dplyr::select(-Claim_2_plus)
+  data_2_plus$Claim <- as.integer(data_2_plus$Claim)
+  model_poisson <- glm(Claim ~ ., data = data_2_plus, family = poisson)
+
+  return(list(
+    model_bin = model_bin,
+    model_1_plus = model_1_plus,
+    model_2_plus = model_2_plus,
+    model_poisson = model_poisson
+  ))
+}
+```
+
+
+```{r}
+# Fonction pour faire des prédictions
+predict_claim <- function(models, data) {
+  data <- data %>%
+  mutate(ID = row_number())  # Ajout d'un identifiant unique
+  data <- data %>%
+    mutate(
+      Claim_bin = as.factor(ifelse(Claim > 0, 1, 0)),
+      Claim_1_plus = as.factor(ifelse(Claim > 1, 1, 0)),
+      Claim_2_plus = as.factor(ifelse(Claim > 2, 1, 0))
+    )
+  
+  # Assurer que `Car_Model` a les mêmes niveaux que ceux du modèle
+  data$Car_Model <- factor(data$Car_Model, levels = levels(models$model_bin$xlevels$Car_Model))
+
+  # Prédiction binaire (sinistre ou pas)
+  data$pred_bin <- predict(models$model_bin, newdata = data, type = "response")
+  data$pred_bin_class <- ifelse(data$pred_bin > 0.3, 1, 0)
+
+  # Sélection des observations avec sinistre
+  data_sinistre <- data %>% filter(pred_bin_class == 1)
+
+  if (nrow(data_sinistre) > 0) {
+    data_sinistre$pred_1_plus <- predict(models$model_1_plus, newdata = data_sinistre, type = "response")
+    data_sinistre$pred_1_plus_class <- ifelse(data_sinistre$pred_1_plus > 0.5, 1, 0)
+  } else {
+    data_sinistre$pred_1_plus_class <- integer(0)
+  }
+
+  # Sélection des observations avec plus de 1 sinistre
+  data_1_plus <- data_sinistre %>% filter(pred_1_plus_class == 1)
+
+  if (nrow(data_1_plus) > 0) {
+    data_1_plus$pred_2_plus <- predict(models$model_2_plus, newdata = data_1_plus, type = "response")
+    data_1_plus$pred_2_plus_class <- ifelse(data_1_plus$pred_2_plus > 0.5, 1, 0)
+  } else {
+    data_1_plus$pred_2_plus_class <- integer(0)
+  }
+
+  # Sélection des observations avec plus de 2 sinistres
+  data_2_plus <- data_1_plus %>% filter(pred_2_plus_class == 1)
+
+  if (nrow(data_2_plus) > 0) {
+    data_2_plus$pred_claim_poisson <- round(as.numeric(predict(models$model_poisson, newdata = data_2_plus, type = "response")))
+  } else {
+    data_2_plus$pred_claim_poisson <- integer(0)
+  }
+
+  # Regroupement des prédictions
+  data_final <- data %>%
+    left_join(data_sinistre %>% dplyr::select(ID, pred_1_plus_class), by = "ID") %>%
+    left_join(data_1_plus %>% dplyr::select(ID, pred_2_plus_class), by = "ID") %>%
+    left_join(data_2_plus %>% dplyr::select(ID, pred_claim_poisson), by = "ID")
+
+  # Remplacement des valeurs NA par des zéros
+  data_final <- data_final %>%
+    mutate(
+      pred_1_plus_class = ifelse(is.na(pred_1_plus_class), 0, pred_1_plus_class),
+      pred_2_plus_class = ifelse(is.na(pred_2_plus_class), 0, pred_2_plus_class),
+      pred_claim_poisson = ifelse(is.na(pred_claim_poisson), 0, pred_claim_poisson)
+    )
+
+  # Calcul de la prédiction finale
+  data_final <- data_final %>%
+    mutate(
+      pred_claim = case_when(
+        pred_bin_class == 0 ~ 0,  # Pas de sinistre
+        pred_1_plus_class == 0 ~ 1,  # Un seul sinistre
+        pred_2_plus_class == 0 ~ 2,  # Deux sinistres
+        TRUE ~ pred_claim_poisson  # Nombre de sinistres prédit par le modèle de Poisson
+      )
+    )
+
+  return(data_final$pred_claim)
+}
+
+```
+
+
+```{r rmse_combines}
+# Charger la bibliothèque nécessaire
+library(Metrics)
+
+# Fonction pour calculer le RMSE combiné
+rmse_combine <- function(y_true, y_pred) {
+  # 🔹 Définition des classes de sinistres
+  C1 <- which(y_true %in% c(0, 1))  # Classe très fréquente
+  C2 <- which(y_true == 2)          # Classe fréquente
+  C3 <- which(y_true == 3)          # Classe rare
+  C4 <- which(y_true >= 4)          # Classe très rare
+
+  # 🔹 Calcul du RMSE par classe (uniquement si la classe est présente)
+  rmse_1 <- if (length(C1) > 0) rmse(y_true[C1], y_pred[C1]) else NA
+  rmse_2 <- if (length(C2) > 0) rmse(y_true[C2], y_pred[C2]) else NA
+  rmse_3 <- if (length(C3) > 0) rmse(y_true[C3], y_pred[C3]) else NA
+  rmse_4 <- if (length(C4) > 0) rmse(y_true[C4], y_pred[C4]) else NA
+
+  # 🔹 Calcul du RMSE combiné en prenant la moyenne des valeurs non NA
+  rmse_values <- c(rmse_1, rmse_2, rmse_3, rmse_4)
+  RMSE_C <- mean(rmse_values, na.rm = TRUE)  # Moyenne des RMSE valides
+
+  # 🔹 Affichage des résultats
+  print(paste("RMSE C1 :", round(rmse_1, 4)))
+  print(paste("RMSE C2 :", round(rmse_2, 4)))
+  print(paste("RMSE C3 :", round(rmse_3, 4)))
+  print(paste("RMSE C4 :", round(rmse_4, 4)))
+  print(paste("RMSE Combiné (RMSE_C) :", round(RMSE_C, 4)))
+
+  return(RMSE_C)
+}
+
+```
+
+
+
+
+```{r}
+# Charger la bibliothèque nécessaire
+library(caret)
+
+# Fixer un seed pour la reproductibilité
+set.seed(125)
+
+# Copie du dataset
+data <- train
+
+# 🔹 **Partitionner les données en 80% train et 20% test**
+index <- createDataPartition(data$Claim, p = 0.7, list = FALSE)
+train_final <- data[index, ]   # 80% des données pour le train
+test_final  <- data[-index, ]  # 20% des données pour le test
+
+# 🔹 **Vérification des tailles**
+cat("✅ Taille du train :", nrow(train_final), "\n")
+cat("✅ Taille du test :", nrow(test_final), "\n")
+
+# 🔹 **Distribution des sinistres**
+cat("\n📊 Distribution des sinistres dans le TRAIN :\n")
+print(table(train_final$Claim))
+
+cat("\n📊 Distribution des sinistres dans le TEST :\n")
+print(table(test_final$Claim))
+
+```
+
+```{r}
+# Entraînement des modèles
+models <- modele(train_final)
+```
+
+
+```{r}
+# Prédictions sur le jeu de test
+y_pred <- predict_claim(models, test_final)
+```
+
+
+```{r}
+y_true <- test_final$Claim  # Valeurs réelles
+
+# Calcul du RMSE combiné
+rmse_c_result <- rmse_combine(y_true, y_pred)
+
+
+table(y_pred)
+table(y_true)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+

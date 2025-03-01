@@ -269,3 +269,61 @@ oversample_multiclass <- function(data, class_var = "Class") {
   oversampled_data <- do.call(rbind, oversampled)
   return(oversampled_data)
 }
+
+
+evaluate_model_rmse_combine <- function(model, train_set, test_set) {
+  library(Metrics)
+  
+  # Prédictions sur train et test
+  train_pred <- predict(model, newdata = train_set, type = "response")
+  test_pred  <- predict(model, newdata = test_set, type = "response")
+  
+  #arrondi
+  train_pred <- round(train_pred)
+  test_pred <- round(test_pred)
+  # Fonction interne pour calculer le RMSE par classe
+  compute_rmse_per_class <- function(actual, predicted) {
+    classes <- list(
+      C1 = which(actual %in% c(0, 1)),  # Classe très fréquente
+      C2 = which(actual == 2),          # Classe fréquente
+      C3 = which(actual == 3),          # Classe rare
+      C4 = which(actual > 3)            # Classe très rare
+    )
+    
+    rmse_values <- sapply(classes, function(idx) {
+      if (length(idx) > 0) {
+        return(rmse(actual[idx], predicted[idx]))
+      } else {
+        return(NA)
+      }
+    })
+    
+    # Calculer le RMSE combiné comme la moyenne des RMSE des classes non NA
+    rmse_values <- rmse_values[!is.na(rmse_values)]
+    RMSE_C <- mean(rmse_values)
+    
+    return(list(rmse_by_class = rmse_values, RMSE_C = RMSE_C))
+  }
+  
+  # Calcul du RMSE combiné pour train et test
+  train_rmse_result <- compute_rmse_per_class(train_set$Claim, train_pred)
+  test_rmse_result  <- compute_rmse_per_class(test_set$Claim, test_pred)
+  
+  # Affichage des résultats
+  cat("\n🔹 MÉTRIQUES SUR L'ENSEMBLE D'ENTRAÎNEMENT\n")
+  cat("RMSE Global:", rmse(train_set$Claim, train_pred), "\n")
+  cat("MAE Global:", mae(train_set$Claim, train_pred), "\n")
+  cat("RMSE Combiné (RMSE_C_train):", train_rmse_result$RMSE_C, "\n")
+  
+  cat("\n🔹 MÉTRIQUES SUR L'ENSEMBLE DE TEST\n")
+  cat("RMSE Global:", rmse(test_set$Claim, test_pred), "\n")
+  cat("MAE Global:", mae(test_set$Claim, test_pred), "\n")
+  cat("RMSE Combiné (RMSE_C_test):", test_rmse_result$RMSE_C, "\n")
+  
+  return(list(
+    RMSE_C_train = train_rmse_result$RMSE_C,
+    RMSE_C_test = test_rmse_result$RMSE_C,
+    rmse_train_by_class = train_rmse_result$rmse_by_class,
+    rmse_test_by_class = test_rmse_result$rmse_by_class
+  ))
+}

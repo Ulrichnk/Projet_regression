@@ -1,0 +1,145 @@
+---
+title: "Modèle XGBoost pour la Prédiction des Sinistres"
+output: html_document
+---
+
+
+Ce document présente l'entraînement d'un modèle de régression XGBoost pour prédire le nombre de sinistres d'un assuré. Nous évaluons les performances du modèle à l'aide du Root Mean Square Error (RMSE), ainsi qu'une version pondérée du RMSE par catégorie de sinistre.
+
+
+
+
+Fonction de métrique personnalisée
+
+Nous définissons une métrique personnalisée `custom_rmse_c()` qui calcule le RMSE par classe de sinistre et en fait la moyenne.
+
+```{r}
+custom_rmse_c <- function(preds, dtrain) {
+  labels <- getinfo(dtrain, "label")
+
+  C_1 <- which(labels %in% c(0, 1))
+  C_2 <- which(labels == 2)
+  C_3 <- which(labels == 3)
+  C_4 <- which(labels > 3)
+
+  rmse_1 <- ifelse(length(C_1) > 0, rmse(labels[C_1], preds[C_1]), NA)
+  rmse_2 <- ifelse(length(C_2) > 0, rmse(labels[C_2], preds[C_2]), NA)
+  rmse_3 <- ifelse(length(C_3) > 0, rmse(labels[C_3], preds[C_3]), NA)
+  rmse_4 <- ifelse(length(C_4) > 0, rmse(labels[C_4], preds[C_4]), NA)
+
+  rmse_c <- mean(c(rmse_1, rmse_2, rmse_3, rmse_4), na.rm = TRUE)
+
+  return(list(metric = "custom_rmse_c", value = rmse_c))
+}
+```
+
+---
+
+2. Préparation des données
+
+Nous divisons les données en jeu d'entraînement (80%) et jeu de test (20%), puis nous créons des matrices compatibles avec XGBoost.
+
+```{r}
+# Chargement des bibliothèques nécessaires
+library(xgboost)
+library(caret)
+library(Metrics)
+library(dplyr)
+
+# Paramètres globaux
+data <- train_final
+test_ratio <- 0.2
+nrounds <- 100
+seed <- 2025
+
+set.seed(seed)
+
+# Division des données en train et test
+trainIndex <- createDataPartition(data$Claim, p = 1 - test_ratio, list = FALSE)
+train_data <- data[trainIndex, ]
+test_data  <- data[-trainIndex, ]
+
+# Création des matrices de prédicteurs
+X_train <- model.matrix(~ . - 1, data = train_data %>% select(-Claim))
+X_test  <- model.matrix(~ . - 1, data = test_data %>% select(-Claim))
+
+# Extraction de la variable cible
+y_train <- train_data$Claim
+y_test  <- test_data$Claim
+
+# Création des DMatrix pour XGBoost
+dtrain <- xgb.DMatrix(data = X_train, label = y_train)
+dtest  <- xgb.DMatrix(data = X_test, label = y_test)
+```
+
+Entraînement du modèle XGBoost
+
+Nous utilisons un modèle XGBoost avec une régression de Poisson (`count:poisson`) pour modéliser les sinistres.
+
+```{r}
+# Définition des paramètres du modèle
+params <- list(
+  booster          = "gbtree",
+  objective        = "count:poisson",
+  eval_metric      = custom_rmse_c,
+  eta              = 0.1,
+  subsample        = 0.8,
+  colsample_bytree = 0.8
+)
+
+# Liste de surveillance
+watchlist <- list(train = dtrain, eval = dtest)
+
+# Entraînement du modèle
+model <- xgb.train(
+  params                = params,
+  data                  = dtrain,
+  nrounds               = nrounds,
+  watchlist             = watchlist,
+  early_stopping_rounds = 10,
+  verbose               = 1, 
+  maximize              = FALSE
+)
+```
+
+---
+
+Évaluation du modèle
+
+Nous évaluons le modèle à l'aide du RMSE standard et du RMSE combiné pondéré par classe.
+
+```{r}
+# Prédictions sur le jeu d'entraînement et de test
+y_train_pred <- predict(model, dtrain)
+y_test_pred<- predict(model, dtest)
+
+# Calcul du RMSE standard
+rmse_train <- rmse(y_train, y_train_pred)
+rmse_test  <- rmse(y_test, y_test_pred)
+
+cat("RMSE sur le train :", round(rmse_train, 4), "\n")
+cat("RMSE sur le test :", round(rmse_test, 4), "\n")
+```
+
+
+Calcul du RMSE combiné
+
+Nous calculons ensuite le RMSE combiné pour le train et le test.
+
+```{r}
+rmse_comb_train <- calculate_class_rmse (X_train, X_test, y_train, y_test, y_train_pred, y_test_pred)
+cat("RMSE combiné sur le train :", round(rmse_comb_train, 4), "\n")
+
+rmse_comb_test <- rmse_combine(y_test, pred_test)
+cat("RMSE combiné sur le test :", round(rmse_comb_test, 4), "\n")
+```
+
+
+Ce modèle XGBoost permet de prédire le nombre de sinistres en s'appuyant sur une régression de Poisson. Nous avons évalué ses performances à l'aide de deux métriques :
+- Le RMSE standard, qui mesure l'écart moyen entre les valeurs réelles et prédites.
+- Le RMSE combiné, qui ajuste l'évaluation en fonction de la fréquence des sinistres.
+
+L'utilisation de la métrique `custom_rmse_c()` nous permet d'améliorer la prise en compte des sinistres rares dans la prédiction.
+
+
+Ce document est maintenant prêt à être utilisé pour un rapport clair et compréhensible.

@@ -1,0 +1,330 @@
+---
+title: "Regression model"
+author: "Ulrich Nguepkap Katchuang"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+    use_bookdown: true
+    lightbox: true
+    gallery: true
+    code_folding: hide
+    train_print: paged
+    theme: flatly
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+params:
+  region: France
+  year: 2025
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+## Introduction
+
+Ce document présente une approche structurée de la modélisation pour la prédiction des sinistres dans un contexte d'assurance. Le rapport décrit l'importation et le prétraitement des données, la construction de modèles séquentiels (modèles logistiques et régression de Poisson) pour prédire le nombre de sinistres, ainsi que l'évaluation et l'optimisation des seuils de décision. Chaque section est accompagnée d'explications détaillées sur les choix méthodologiques et les techniques employées.
+
+## Préparation des données
+
+Dans cette section, nous importons le jeu de données et préparons les variables pour la modélisation. Les variables catégorielles sont converties en facteurs, et seules les variables pertinentes sont retenues pour l'analyse.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  tidy = TRUE
+)
+
+source("functions.R")
+```
+
+```{r data_display}
+library(rmarkdown)
+library(dplyr)
+
+# Importation des données depuis le fichier CSV
+df <- read.csv('./data/train_set_clean.csv', header = TRUE, sep = ",", dec = ".")
+test_katia <- read.csv('./data/test_set_clean.csv', header = TRUE, sep = ",", dec = ".")
+
+# Classification des variables via une fonction externe
+variables <- classifier_variables_tab(df)
+numeric_variables <- variables$variables_numeriques
+categorical_variables <- append(variables$variables_categorielles, variables$variables_binaires)
+
+
+# Conversion des variables catégorielles en facteurs
+df[categorical_variables] <- lapply(df[categorical_variables], factor)
+variables <- classifier_variables_tab(df)
+numeric_variables <- variables$variables_numeriques
+test_katia[categorical_variables] <- lapply(test_katia[categorical_variables], factor)    
+
+# Sélection des variables pertinentes pour la modélisation
+train <- df %>% dplyr::select(-Car_Age, -Age, -Age_log, -Inhab_density, -Car_Model)
+test_katia <- test_katia %>% dplyr::select(-Car_Age, -Age, -Age_log, -Inhab_density, -Car_Model)
+```
+
+## Modélisation
+
+La modélisation est réalisée en plusieurs étapes. Tout d'abord, nous générons des variables binaires à partir de la variable `Claim` pour structurer le problème en sous-étapes. Ensuite, plusieurs modèles sont entraînés :
+
+1. Un modèle logistique pour prédire la présence ou l'absence d'un sinistre.
+2. Un second modèle logistique pour distinguer entre un sinistre unique et plusieurs sinistres.
+3. Un troisième modèle logistique pour affiner la distinction lorsque le nombre de sinistres dépasse une certaine valeur.
+4. Un modèle de régression de Poisson pour estimer précisément le nombre de sinistres lorsque les précédentes étapes indiquent un nombre élevé.
+
+```{r modele_composite}
+library(dplyr)
+library(caret)
+library(nnet)
+
+# Fonction pour entraîner les modèles avec oversampling
+modele <- function(data) {
+  set.seed(2025)  # Assurer la reproductibilité des résultats
+  
+  # Création des variables binaires pour les différentes étapes de prédiction
+  data_copy <- data %>%
+    mutate(
+      Claim_bin = as.factor(ifelse(Claim > 0, 1, 0)),   # 0 : pas de sinistre, 1 : sinistre
+      Claim_1_plus = as.factor(ifelse(Claim > 1, 1, 0)),  # 0 : un sinistre, 1 : plus d'un sinistre
+      Claim_2_plus = as.factor(ifelse(Claim > 2, 1, 0))   # 0 : deux sinistres, 1 : plus de deux sinistres
+    )
+  
+  # Conversion de la variable d'origine en facteur pour le modèle binaire
+  data_copy$Claim <- as.factor(data_copy$Claim)
+  
+  # Modèle 1 : Prédiction de la présence ou non d'un sinistre
+  model_bin <- glm(Claim_bin ~ ., data = data_copy %>% dplyr::select(-Claim_1_plus, -Claim_2_plus, -Claim), family = binomial)
+  
+  # Sélection des données pour les cas présentant un sinistre
+  data_sinistre <- data_copy %>% filter(Claim_bin == 1) %>% dplyr::select(-Claim_bin)
+  table(data_sinistre$Claim_2_plus)
+  
+  # Modèle 2 : Prédiction entre un sinistre et plusieurs sinistres
+  model_1_plus <- glm(Claim_1_plus ~ ., data = data_sinistre %>% dplyr::select(-Claim_2_plus, -Claim), family = binomial)
+  
+  # Sélection des cas où plusieurs sinistres sont possibles
+  data_1_plus <- data_sinistre %>% filter(Claim_1_plus == 1) %>% dplyr::select(-Claim_1_plus)
+  
+  # Modèle 3 : Prédiction entre exactement deux sinistres et plus de deux sinistres
+  model_2_plus <- glm(Claim_2_plus ~ ., data = data_1_plus %>% dplyr::select(-Claim), family = binomial)
+  
+  # Sélection des données pour la régression de Poisson (plus de deux sinistres)
+  data_2_plus <- data_1_plus %>% filter(Claim_2_plus == 1) %>% dplyr::select(-Claim_2_plus)
+  data_2_plus$Claim <- as.numeric(data_2_plus$Claim)
+  data_2_plus$Claim <- as.integer(data_2_plus$Claim)
+  
+  # Modèle 4 : Régression de Poisson pour estimer le nombre de sinistres
+  model_poisson <- glm(Claim ~ ., data = data_2_plus, family = poisson)
+  
+  return(list(model_bin = model_bin,
+              model_1_plus = model_1_plus,
+              model_2_plus = model_2_plus,
+              model_poisson = model_poisson))
+}
+```
+
+## Prédiction
+
+La fonction de prédiction applique les modèles de façon séquentielle. Pour chaque observation, le processus est le suivant :
+
+1. Le modèle binaire détermine si un sinistre est présent.
+2. Si un sinistre est détecté, le modèle "1_plus" distingue entre un sinistre unique et plusieurs sinistres.
+3. En cas de prédiction de plusieurs sinistres, le modèle "2_plus" précise si le nombre est exactement de deux.
+4. Lorsque le modèle "2_plus" indique plus de deux sinistres, le modèle de Poisson est utilisé pour estimer le nombre exact.
+
+```{r response}
+predict_claims <- function(models, data,
+                           threshold_bin = 0.5,
+                           threshold_1_plus = 0.5,
+                           threshold_2_plus = 0.5) {
+  # Création d'une copie du jeu de données pour préserver les données originales
+  data_copy <- data
+  
+  # 1. Prédiction du modèle binaire : présence ou absence de sinistre
+  prob_bin <- predict(models$model_bin, newdata = data_copy, type = "response")
+  pred_bin <- ifelse(prob_bin > threshold_bin, 1, 0)
+  
+  # Initialisation du vecteur qui contiendra les prédictions finales
+  final_pred <- numeric(nrow(data_copy))
+  
+  # Traitement de chaque observation
+  for (i in 1:nrow(data_copy)) {
+    if (pred_bin[i] == 0) {
+      final_pred[i] <- 0
+    } else {
+      # Prédiction avec le modèle "1_plus"
+      prob_1_plus <- predict(models$model_1_plus, newdata = data_copy[i, , drop = FALSE], type = "response")
+      pred_1_plus <- ifelse(prob_1_plus > threshold_1_plus, 1, 0)
+      
+      if (pred_1_plus == 0) {
+        final_pred[i] <- 1
+      } else {
+        # Prédiction avec le modèle "2_plus"
+        prob_2_plus <- predict(models$model_2_plus, newdata = data_copy[i, , drop = FALSE], type = "response")
+        pred_2_plus <- ifelse(prob_2_plus > threshold_2_plus, 1, 0)
+        
+        if (pred_2_plus == 0) {
+          final_pred[i] <- 2
+        } else {
+          # Estimation du nombre de sinistres avec le modèle de Poisson
+          pred_poisson <- predict(models$model_poisson, newdata = data_copy[i, , drop = FALSE], type = "response")
+          final_pred[i] <- round(pred_poisson)
+        }
+      }
+    }
+  }
+  
+  return(final_pred)
+}
+```
+
+## Partitionnement et Rééchantillonnage
+
+Pour valider les modèles, le jeu de données est partitionné en deux ensembles : un ensemble d'entraînement (80 %) et un ensemble de test (20 %). Par ailleurs, une technique de rééchantillonnage est appliquée afin d'équilibrer la distribution des sinistres entre les différentes classes.
+
+```{r sampling}
+library(caret)
+
+# Fixation d'une graine pour assurer la reproductibilité
+set.seed(2025)
+
+# Partitionnement du jeu de données en 80 % pour l'entraînement et 20 % pour le test
+index <- createDataPartition(train$Claim, p = 0.8, list = FALSE)
+train_final <- train[index, ]    # Ensemble d'entraînement
+test_final  <- train[-index, ]   # Ensemble de test
+
+# Affichage des dimensions des ensembles
+cat("Taille de l'ensemble d'entraînement :", nrow(train_final), "\n")
+cat("Taille de l'ensemble de test :", nrow(test_final), "\n")
+
+# Affichage de la distribution des sinistres dans chaque ensemble
+cat("\nDistribution des sinistres dans l'ensemble d'entraînement :\n")
+print(table(train_final$Claim))
+
+cat("\nDistribution des sinistres dans l'ensemble de test :\n")
+print(table(test_final$Claim))
+```
+
+
+## Entraînement et Évaluation des Modèles
+
+Les modèles sont entraînés sur l'ensemble d'entraînement. Ensuite, la fonction `predict_claims` est utilisée pour générer des prédictions sur l'ensemble de test. L'évaluation se fait à l'aide de l'erreur quadratique moyenne (RMSE) calculée par classe et sous forme combinée.
+
+```{r}
+# Entraînement des modèles sur l'ensemble d'entraînement
+models <- modele(train)
+```
+
+```{r}
+# Prédictions sur le jeu de test en ajustant les seuils pour chaque modèle
+y_pred <- predict_claims(models, test_final, threshold_bin = 0.3, threshold_1_plus = 0.2, threshold_2_plus = 0.1)
+```
+
+```{r}
+# Affichage des distributions des prédictions et des valeurs réelles
+table(y_pred)
+table(test_final$Claim)
+```
+
+```{r rmse_combines}
+library(Metrics)
+
+# Fonction pour calculer le RMSE par classe et le RMSE combiné
+rmse_combine <- function(y_true, y_pred) {
+  # Définition des classes selon la fréquence des sinistres
+  C1 <- which(y_true %in% c(0, 1))  # Classe très fréquente
+  C2 <- which(y_true == 2)          # Classe fréquente
+  C3 <- which(y_true == 3)          # Classe rare
+  C4 <- which(y_true >= 4)          # Classe très rare
+
+  # Calcul du RMSE pour chaque classe (si présente)
+  rmse_1 <- if (length(C1) > 0) rmse(y_true[C1], y_pred[C1]) else NA
+  rmse_2 <- if (length(C2) > 0) rmse(y_true[C2], y_pred[C2]) else NA
+  rmse_3 <- if (length(C3) > 0) rmse(y_true[C3], y_pred[C3]) else NA
+  rmse_4 <- if (length(C4) > 0) rmse(y_true[C4], y_pred[C4]) else NA
+
+  # Calcul du RMSE combiné en prenant la moyenne des valeurs non manquantes
+  rmse_values <- c(rmse_1, rmse_2, rmse_3, rmse_4)
+  RMSE_C <- mean(rmse_values, na.rm = TRUE)
+
+  # Affichage des résultats par classe et du RMSE global
+  print(paste("RMSE C1 :", round(rmse_1, 4)))
+  print(paste("RMSE C2 :", round(rmse_2, 4)))
+  print(paste("RMSE C3 :", round(rmse_3, 4)))
+  print(paste("RMSE C4 :", round(rmse_4, 4)))
+  print(paste("RMSE Combiné (RMSE_C) :", round(RMSE_C, 4)))
+
+  return(RMSE_C)
+}
+```
+
+```{r}
+# Évaluation sur le jeu de test
+y_pred <- predict_claims(models, test_final, threshold_bin = 0.05, threshold_1_plus = 0.2, threshold_2_plus = 0.1)
+table(y_pred)
+y_true <- test_final$Claim
+rmse_c_result <- rmse_combine(y_true, y_pred)
+```
+
+```{r}
+# Évaluation sur l'ensemble d'entraînement
+y_true <- train_final$Claim
+y_pred <- predict_claims(models, train_final, threshold_bin = 0.05, threshold_1_plus = 0.2, threshold_2_plus = 0.1)
+rmse_c_result <- rmse_combine(y_true, y_pred)
+```
+
+## Optimisation des Seuils
+
+Afin d'optimiser la performance, une fonction objectif est définie pour ajuster les seuils de décision utilisés dans la fonction de prédiction. L'optimisation se fait en minimisant le RMSE combiné à l'aide de la méthode "L-BFGS-B".
+
+```{r eval=FALSE}
+# Chargement des bibliothèques nécessaires pour l'optimisation
+library(Metrics)
+library(dplyr)
+
+# Fonction objectif pour l'optimisation des seuils
+objective_thresholds <- function(thresholds, models, test_final) {
+  # Extraction des seuils
+  threshold_bin    <- thresholds[1]
+  threshold_1_plus <- thresholds[2]
+  threshold_2_plus <- thresholds[3]
+  
+  # Prédiction avec les seuils spécifiés
+  y_pred <- predict_claims(models, test_final, 
+                           threshold_bin = threshold_bin, 
+                           threshold_1_plus = threshold_1_plus, 
+                           threshold_2_plus = threshold_2_plus)
+  
+  # Calcul du RMSE combiné
+  rmse_value <- rmse_combine(test_final$Claim, y_pred)
+  return(rmse_value)
+}
+
+# Paramètres initiaux pour l'optimisation
+init_thresholds <- c(0.1, 0.3, 0.1)
+
+# Optimisation des seuils en utilisant la méthode "L-BFGS-B" avec bornes [0, 1]
+opt_result <- optim(par = init_thresholds, 
+                    fn = objective_thresholds, 
+                    models = models, 
+                    test_final = test_final,
+                    method = "L-BFGS-B", 
+                    lower = rep(0, 3), 
+                    upper = rep(1, 3),
+                    control = list(fnscale = 1))
+
+# Affichage des résultats de l'optimisation
+cat("Seuils optimaux :\n")
+cat("threshold_bin    =", round(opt_result$par[1], 4), "\n")
+cat("threshold_1_plus =", round(opt_result$par[2], 4), "\n")
+cat("threshold_2_plus =", round(opt_result$par[3], 4), "\n")
+cat("RMSE combiné minimal :", round(opt_result$value, 4), "\n")
+```
+
+## Conclusion
+
+Ce rapport présente une méthode complète de modélisation pour la prédiction des sinistres. Il inclut la préparation des données, la construction d'une chaîne de modèles de régression, l'évaluation des performances par RMSE, ainsi que l'optimisation des seuils de décision. La démarche décrite offre une base solide pour l'analyse et l'interprétation des sinistres dans un contexte d'assurance.
+```

@@ -64,8 +64,8 @@ test<-read.csv('./data/test_set.csv', header = T, sep = ",",dec=".")
 sum(is.na(train))
 
 #On va transformer bonus_malus en binaire
-train$Bonus_Malus <- ifelse(train$Bonus_Malus < 100, "Bonus", "Malus")
-test$Bonus_Malus <- ifelse(test$Bonus_Malus < 100, "Bonus", "Malus")
+#train$Bonus_Malus <- ifelse(train$Bonus_Malus < 100, "Bonus", "Malus")
+#test$Bonus_Malus <- ifelse(test$Bonus_Malus < 100, "Bonus", "Malus")
 train<-train %>% select(-PolID)
 test<-test %>% select(-PolID)
 

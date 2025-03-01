@@ -1,0 +1,396 @@
+---
+title: "Regression model"
+author: "Ulrich Nguepkap Katchuang"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+    use_bookdown: true
+    lightbox: true
+    gallery: true
+    code_folding: hide
+    train_print: paged
+    theme: flatly
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+params:
+  region: France
+  year: 2025
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  tidy=TRUE
+)
+
+source("functions.R")
+```
+
+
+
+
+```{r data_display}
+library(rmarkdown)
+library(dplyr)
+
+
+#importation des données
+df<-read.csv('./data/train_set_clean.csv', header = T, sep = ",",dec=".")
+
+
+variables <- classifier_variables_tab(df)
+numeric_variables <- variables$variables_numeriques
+categorical_variables <- append(variables$variables_categorielles, variables$variables_binaires)
+
+
+#convertir les varianles catégorielles en factor
+df[categorical_variables] <- lapply(df[categorical_variables], factor)
+#train<-df %>% dplyr::select(-Car_Age,-Age,-Age_log,-Inhab_density )
+#test<- test %>% select(-Claim)
+train<-df %>% dplyr::select(-Car_Age,-Age,-Inhab_density , Age_Group)
+
+
+str(train)
+```
+
+
+
+
+
+modèle
+
+
+```{r}
+# Charger la bibliothèque nécessaire
+library(caret)
+
+# Fixer un seed pour la reproductibilité
+set.seed(2025)
+
+# Copie du dataset
+data <- df
+
+# 🔹 **Partitionner les données en 70% train et 30% test**
+index <- caret::createDataPartition(data$Claim, p = 0.7, list = FALSE)
+train_final <- data[index, ]   # 70% des données pour l'entraînement
+test_final  <- data[-index, ]  # 30% des données pour le test
+
+# 🔹 **Séparer la variable cible et les prédicteurs**
+target_variable <- "Claim"
+predictor_variables <- setdiff(names(train_final), target_variable)
+
+# 🔹 **Standardisation des variables explicatives uniquement**
+preprocess_params <- preProcess(train_final[, predictor_variables], method = c("center", "scale"))
+
+# Appliquer la transformation aux variables explicatives
+train_final_scaled <- train_final
+test_final_scaled  <- test_final
+
+train_final_scaled[, predictor_variables] <- predict(preprocess_params, train_final[, predictor_variables])
+test_final_scaled[, predictor_variables]  <- predict(preprocess_params, test_final[, predictor_variables])
+
+# 🔹 **Vérification des tailles**
+cat("✅ Taille du train :", nrow(train_final_scaled), "\n")
+cat("✅ Taille du test :", nrow(test_final_scaled), "\n")
+
+
+
+train<-train_final_scaled
+test<-test_final_scaled
+
+rm(train_final, test_final, train_final_scaled, test_final_scaled, data, index, predictor_variables, target_variable, preprocess_params)
+
+```
+
+```{r}
+poisson_model <- glm(Claim ~ ., data = train, family = poisson)
+```
+
+
+```{r}
+evaluate_model_rmse_combine(poisson_model, train, test)
+# Prédictions sur les ensembles d'entraînement et de test
+print("Prédictions sur l'ensemble d'entraînement :")
+table(train$Claim)
+table(round(predict(poisson_model, newdata = train, type = "response")))
+#table(train_std$Claim)
+print("Prédictions sur l'ensemble de test :")
+table(round(predict(poisson_model, newdata = test, type = "response")))
+table(test$Claim)
+```
+
+
+
+
+
+```{r eval=False}
+library(nnet)
+modele_multinom <- multinom(Claim ~ ., data = train)
+predictions <- predict(modele_multinom, train, type = "class")
+#print(predictions)
+table(predictions)
+```
+
+
+```{r}
+# Charger les bibliothèques nécessaires
+library(dplyr)
+library(ROSE)
+
+# Fonction pour équilibrer les données avec ROSE
+balance_data_with_rose <- function(data) {
+  # 1️⃣ Création des variables binaires
+  data_copy <- data %>%
+    mutate(
+      Claim_bin = as.factor(ifelse(Claim > 0, 1, 0)),   # 0 = pas de sinistre, 1 = sinistre
+      Claim_1_plus = as.factor(ifelse(Claim > 1, 1, 0)), # 0 = 1 sinistre, 1 = plus de 1
+      Claim_2_plus = as.factor(ifelse(Claim > 2, 1, 0))  # 0 = 2 sinistres, 1 = plus de 2
+    )
+
+  # 2️⃣ Équilibrage de `Claim_bin` (sinistre ou pas)
+  data_balanced_bin <- ROSE(Claim_bin ~ ., data = data_copy, seed = 2025)$data
+
+  # 3️⃣ Filtrer les sinistrés et équilibrer `Claim_1_plus`
+  data_sinistres <- data_balanced_bin %>% filter(Claim_bin == 1)
+  data_balanced_1_plus <- ROSE(Claim_1_plus ~ ., data = data_sinistres, seed = 2025)$data
+
+  # 4️⃣ Filtrer ceux avec plus d'un sinistre et équilibrer `Claim_2_plus`
+  data_1_plus <- data_balanced_1_plus %>% filter(Claim_1_plus == 1)
+  data_balanced_2_plus <- ROSE(Claim_2_plus ~ ., data = data_1_plus, seed = 2025)$data
+  
+  print(table(data_balanced_bin$Claim_bin))
+
+  # 5️⃣ Fusion des datasets équilibrés
+  data_final <- data_balanced_bin %>%
+    left_join(data_balanced_1_plus %>% dplyr::select(-Claim_bin), by = names(data_balanced_1_plus)) %>%
+    left_join(data_balanced_2_plus %>% dplyr::select(-Claim_bin, -Claim_1_plus), by = names(data_balanced_2_plus))
+
+  # 6️⃣ Remplacement des valeurs NA par 0
+  data_final <- data_final %>%
+    mutate(across(starts_with("Claim"), ~ifelse(is.na(.), 0, .)))
+
+  # Affichage des proportions après équilibrage
+  print("Distribution après équilibrage :")
+  print(table(data_final$Claim_bin))
+  print(table(data_final$Claim_1_plus))
+  print(table(data_final$Claim_2_plus))
+
+  # Retourner le dataset équilibré
+  return(data_final)
+}
+
+```
+
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(ROSE)
+
+# Function to balance data with ROSE using an index
+balance_data_with_rose <- function(data) {
+  # Add an index column to the dataset
+  data <- data %>% mutate(index = row_number())
+
+  # Create binary variables
+  data_copy <- data %>%
+    mutate(
+      Claim_bin = as.factor(ifelse(Claim > 0, 1, 0)),   # 0 = no claim, 1 = claim
+      Claim_1_plus = as.factor(ifelse(Claim > 1, 1, 0)), # 0 = 1 claim, 1 = more than 1
+      Claim_2_plus = as.factor(ifelse(Claim > 2, 1, 0))  # 0 = 2 claims, 1 = more than 2
+    )
+
+  # Balance `Claim_bin`
+  data_balanced_bin <- ROSE(Claim_bin ~ ., data = data_copy, seed = 2025)$data
+
+  # Filter and balance `Claim_1_plus`
+  data_sinistres <- data_balanced_bin %>% filter(Claim_bin == 1)
+  data_balanced_1_plus <- ROSE(Claim_1_plus ~ ., data = data_sinistres, seed = 2025)$data
+
+  # Filter and balance `Claim_2_plus`
+  data_1_plus <- data_balanced_1_plus %>% filter(Claim_1_plus == 1)
+  data_balanced_2_plus <- ROSE(Claim_2_plus ~ ., data = data_1_plus, seed = 2025)$data
+
+  # Merge balanced datasets using the index
+  data_final <- data_balanced_bin %>%
+    left_join(data_balanced_1_plus %>% dplyr::select(index, Claim_1_plus), by = "index") %>%
+    left_join(data_balanced_2_plus %>% dplyr::select(index, Claim_2_plus), by = "index")
+
+  # Replace NA values with 0
+  data_final <- data_final %>%
+    mutate(across(starts_with("Claim"), ~ifelse(is.na(.), 0, .)))
+
+  # Display distributions after balancing
+  print("Distribution after balancing:")
+  print(table(data_final$Claim_bin))
+  print(table(data_final$Claim_1_plus))
+  print(table(data_final$Claim_2_plus))
+
+  # Return the balanced dataset
+  return(data_final)
+}
+
+# Example usage
+# balanced_data <- balance_data_with_rose(train)
+
+```
+
+```{r}
+library(nnet)
+data <- train
+library(ROSE)
+
+# Appliquer ROSE pour équilibrer les classes
+data_balanced <- balance_data_with_rose(data)
+```
+```{r}
+table(data_balanced$Claim_bin)
+```
+
+
+```{r}
+str(data_balanced)
+modele_multinom <- multinom(Claim ~ ., data =train)
+predictions <- predict(modele_multinom, train, type = "class")
+table(predictions)
+rm(data)
+```
+
+
+
+# modele sophitique
+
+
+```{r}
+predict_final_claim <- function(multinom_model, poisson_model, test_data) {
+  # Prédiction de la classe avec le modèle multinomial
+  pred_class <- predict(multinom_model, newdata = test_data)
+  
+  # Prédiction du nombre de sinistres avec le modèle de Poisson (prédiction continue)
+  pred_count <- predict(poisson_model, newdata = test_data, type = "response")
+  pred_count_round <- round(pred_count)  # arrondi au nombre entier le plus proche
+  
+  # Initialisation du vecteur de prédictions finales (tableau numérique)
+  final_pred <- numeric(length(pred_count_round))
+  
+  # Boucle sur chaque observation pour vérifier la cohérence entre la classe et le nombre prédit
+  for(i in seq_along(pred_count_round)) {
+    class_i <- as.character(pred_class[i])
+    count_i <- pred_count_round[i]
+    
+    if(class_i == "C1") {
+      # Pour la classe C1, la valeur attendue est 0 ou 1
+      valid_values <- c(0, 1)
+      if(count_i %in% valid_values) {
+        final_pred[i] <- count_i
+      } else {
+        final_pred[i] <- sample(valid_values, 1)
+      }
+    } else if(class_i == "C2") {
+      # Pour la classe C2, on attend 2
+      final_pred[i] <- 2
+    } else if(class_i == "C3") {
+      # Pour la classe C3, on attend 3
+      final_pred[i] <- 3
+    } else if(class_i == "C4") {
+      # Pour la classe C4, on attend une valeur >= 4
+      if(count_i >= 4) {
+        final_pred[i] <- count_i
+      } else {
+        # Attribution aléatoire dans un intervalle, par exemple entre 4 et 6
+        final_pred[i] <- sample(4:6, 1)
+      }
+    }
+  }
+  
+  return(final_pred)
+}
+
+# Exemple d'utilisation :
+
+# Supposons que vous ayez déjà ajusté vos modèles :
+# model_multinom <- multinom(Claim_class ~ ., data = train_data)
+# model_poisson  <- glm(Claim ~ ., data = train_data, family = poisson)
+
+# Et que votre jeu de test s'appelle test_data et contient la variable Claim réelle
+final_predictions <- predict_final_claim(modele_multinom, poisson_model, test)
+
+# Calcul du RMSE avec le package Metrics
+library(Metrics)
+rmse_value <- rmse(test$Claim, final_predictions)
+cat("RMSE final :", round(rmse_value, 4), "\n")
+
+```
+
+```{r}
+# Prédictions finales sur l'ensemble de test
+error <- evaluate_model_rmse_combine(poisson_model, train, test)
+```
+```{r}
+Calculate_class_rmse <- function(X_train, X_test, y_train, y_test, y_train_pred, y_test_pred) {
+  
+  # Définition des classes basées sur la fréquence des valeurs de Claim
+  C_1 <- which(y_train %in% c(0, 1))  
+  C_2 <- which(y_train == 2)           
+  C_3 <- which(y_train == 3)          
+  C_4 <- which(y_train > 3)   
+  
+  # 🔍 Étape 1 : Calcul du RMSE par classe pour l'entraînement
+  rmse_1_train <- ifelse(length(C_1) > 0, rmse(y_train[C_1], y_train_pred[C_1]), NA)
+  rmse_2_train <- ifelse(length(C_2) > 0, rmse(y_train[C_2], y_train_pred[C_2]), NA)
+  rmse_3_train <- ifelse(length(C_3) > 0, rmse(y_train[C_3], y_train_pred[C_3]), NA)
+  rmse_4_train <- ifelse(length(C_4) > 0, rmse(y_train[C_4], y_train_pred[C_4]), NA)
+  
+    # Définition des classes basées sur la fréquence des valeurs de Claim
+  C_1 <- which(y_test %in% c(0, 1))  
+  C_2 <- which(y_test == 2)           
+  C_3 <- which(y_test == 3)          
+  C_4 <- which(y_test > 3) 
+  # 🔹 RMSE combiné sur l'entraînement
+  RMSE_c_train <- mean(c(rmse_1_train, rmse_2_train, rmse_3_train, rmse_4_train), na.rm = TRUE)
+  
+  # 🔍 Étape 2 : Calcul du RMSE par classe pour le test
+  rmse_1 <- ifelse(length(C_1) > 0, rmse(y_test[C_1], y_test_pred[C_1]), NA)
+  rmse_2 <- ifelse(length(C_2) > 0, rmse(y_test[C_2], y_test_pred[C_2]), NA)
+  rmse_3 <- ifelse(length(C_3) > 0, rmse(y_test[C_3], y_test_pred[C_3]), NA)
+  rmse_4 <- ifelse(length(C_4) > 0, rmse(y_test[C_4], y_test_pred[C_4]), NA)
+  
+  # 🔹 RMSE combiné sur le test
+  RMSE_c <- mean(c(rmse_1, rmse_2, rmse_3, rmse_4), na.rm = TRUE)
+  
+  # 📊 Affichage des résultats
+  cat("\n📊 Résultats des RMSE par classe et combinés :\n")
+  cat("🔹 RMSE train classe 1 (0-1 sinistres) :", rmse_1_train, "\n")
+  cat("🔹 RMSE train classe 2 (2 sinistre)  :", rmse_2_train, "\n")
+  cat("🔹 RMSE train classe 3 (3 sinistres) :", rmse_3_train, "\n")
+  cat("🔹 RMSE train classe 4 (>=4 sinistres) :", rmse_4_train, "\n")
+  cat("📌 RMSE combiné TRAIN :", RMSE_c_train, "\n\n")
+  
+  cat("🔹 RMSE test classe 1 (0-1 sinistres) :", rmse_1, "\n")
+  cat("🔹 RMSE test classe 2 (2 sinistre)  :", rmse_2, "\n")
+  cat("🔹 RMSE test classe 3 (3 sinistres) :", rmse_3, "\n")
+  cat("🔹 RMSE test classe 4 (>=4 sinistres) :", rmse_4, "\n")
+  cat("📌 RMSE combiné TEST :", RMSE_c, "\n")
+  
+  return(list(RMSE_c_train = RMSE_c_train, RMSE_c_test = RMSE_c))
+}
+```
+
+
+```{r}
+
+predictions <- predict_final_claim(modele_multinom, poisson_model, test)
+predictions <- round(predictions)
+pred_train <- predict_final_claim(modele_multinom, poisson_model, train)
+pred_train <- round(pred_train)
+Calculate_class_rmse(train, test, train$Claim, test$Claim, pred_train, predictions)
+```
+

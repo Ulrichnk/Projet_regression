@@ -230,7 +230,10 @@ relation <- function(data) {
 ```{r}
 # Exécuter la fonction
 resultats <- relation(train)
+```
 
+
+```{r}
 # Afficher les prédictions et vraies valeurs
 head(resultats$predictions)
 
